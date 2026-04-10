@@ -1,4 +1,4 @@
-# Coding Agent Instructions — WrapSentry
+# Coding Agent Instructions — sbom-sentry
 
 This document defines **how** the project must be implemented,
 independent of the functional design in DESIGN.md.
@@ -9,7 +9,13 @@ independent of the functional design in DESIGN.md.
 
 - All relevant code must be written in **Go**
 - Use Go modules for dependency management
-- Minimize external dependencies
+- Minimize external dependencies where practical
+- Existing, well-maintained tools and libraries may be used when they
+   reduce implementation risk, improve archive coverage, or provide
+   stronger safety guarantees than a bespoke implementation
+- The selection of such tools is a solution design decision and must be
+   documented in the software module guide, including the reason for the
+   choice and the intended scope of use
 
 ---
 
@@ -32,7 +38,8 @@ An overall software module guide shall be maintained, describing:
 - The abstract interaction between the software modules
 - The abstract interface definition of every software module
 - The design decisions encapsulated within every software module
-- It shall cover own code as well as external tools
+- It shall cover own code as well as external tools, libraries, and
+   helper binaries selected for the implementation
 
 ### 3.2 Code Documentation
 Every exported function or method must have a GoDoc comment describing:
@@ -64,12 +71,12 @@ The project must include:
 
 2. **Integration tests**
    - Focussed on interfaces between software modules
-   - Inbetween Go modules
+   - Between Go modules
    - Between Go code and external tools
-   - Include tests with real archive formats (ZIP, CAB, MSI)
+   - Include tests with real supported archive formats (for example ZIP, CAB, MSI, TAR)
 
 3. **End-to-end tests**
-   - One ZIP → SBOM + audit report
+   - One input file → SBOM + audit report
    - Nested container scenarios
    - Limit-trigger behavior
 
@@ -96,7 +103,9 @@ All changes must be validated by automated checks, including:
 - `go test -race`
 - `go test -cover`
 - `golangci-lint`
-- yamllint
+- Additional format-specific linters or validators when the project
+   introduces such file types; the selection is a solution design
+   decision documented in the software module guide
 
 CI must fail on linting or test failures.
 
@@ -133,7 +142,7 @@ CI must fail on linting or test failures.
 
 Work is complete when:
 - The tool builds and runs on Linux
-- One ZIP yields one SBOM and one audit report
+- One input file yields one SBOM and one audit report
 - Recursive extraction behaves as specified
 - Limits and policies are enforced and tested
 - CI passes without exceptions
