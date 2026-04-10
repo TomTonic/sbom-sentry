@@ -197,6 +197,7 @@ func DefaultLimits() Limits {
 type Config struct {
 	InputPath     string
 	OutputDir     string
+	WorkDir       string        // base directory for temporary extraction work
 	SBOMFormat    string        // "cyclonedx-json"
 	PolicyMode    PolicyMode    // Strict | Partial
 	InterpretMode InterpretMode // Physical | InstallerSemantic
@@ -216,6 +217,7 @@ func DefaultConfig() Config {
 		InterpretMode: InterpretInstallerSemantic,
 		ReportMode:    ReportHuman,
 		Language:      "en",
+		WorkDir:       os.TempDir(),
 		Limits:        DefaultLimits(),
 	}
 }
@@ -247,6 +249,26 @@ func (c *Config) Validate() error {
 	}
 	if !outInfo.IsDir() {
 		return fmt.Errorf("output path must be a directory: %s", c.OutputDir)
+	}
+
+	if c.WorkDir == "" {
+		return fmt.Errorf("work directory is required")
+	}
+
+	workInfo, err := os.Stat(c.WorkDir)
+	if err != nil {
+		return fmt.Errorf("work directory: %w", err)
+	}
+	if !workInfo.IsDir() {
+		return fmt.Errorf("work path must be a directory: %s", c.WorkDir)
+	}
+
+	probeDir, err := os.MkdirTemp(c.WorkDir, "sbom-sentry-writecheck-*")
+	if err != nil {
+		return fmt.Errorf("work directory is not writable: %w", err)
+	}
+	if err := os.RemoveAll(probeDir); err != nil {
+		return fmt.Errorf("cleanup work directory probe: %w", err)
 	}
 
 	switch c.Language {

@@ -184,18 +184,18 @@ func extractRecursive(ctx context.Context, node *ExtractionNode, filePath string
 
 	switch info.Format {
 	case identify.ZIP:
-		err = extractZIP(extractCtx, node, filePath, cfg.Limits, stats)
+		err = extractZIP(extractCtx, node, filePath, cfg.WorkDir, cfg.Limits, stats)
 	case identify.TAR:
-		err = extractTAR(extractCtx, node, filePath, nil, cfg.Limits, stats)
+		err = extractTAR(extractCtx, node, filePath, nil, cfg.WorkDir, cfg.Limits, stats)
 	case identify.GzipTAR:
-		err = extractCompressedTAR(extractCtx, node, filePath, "gzip", cfg.Limits, stats)
+		err = extractCompressedTAR(extractCtx, node, filePath, "gzip", cfg.WorkDir, cfg.Limits, stats)
 	case identify.Bzip2TAR:
-		err = extractCompressedTAR(extractCtx, node, filePath, "bzip2", cfg.Limits, stats)
+		err = extractCompressedTAR(extractCtx, node, filePath, "bzip2", cfg.WorkDir, cfg.Limits, stats)
 	case identify.XzTAR, identify.ZstdTAR:
 		// XZ and Zstd require external libraries; for now mark as needing 7zz.
-		err = extract7z(extractCtx, node, filePath, sb, cfg.Limits)
+		err = extract7z(extractCtx, node, filePath, sb, cfg.WorkDir, cfg.Limits)
 	case identify.CAB, identify.SevenZip, identify.RAR:
-		err = extract7z(extractCtx, node, filePath, sb, cfg.Limits)
+		err = extract7z(extractCtx, node, filePath, sb, cfg.WorkDir, cfg.Limits)
 	case identify.MSI:
 		// Read MSI metadata directly from the OLE structure (independent of 7zz).
 		if meta, msiErr := ReadMSIMetadata(filePath); msiErr == nil {
@@ -206,9 +206,9 @@ func extractRecursive(ctx context.Context, node *ExtractionNode, filePath string
 		if cfg.InterpretMode == config.InterpretInstallerSemantic && node.Metadata != nil {
 			node.InstallerHint = "msi-file-table-remapping-available"
 		}
-		err = extract7z(extractCtx, node, filePath, sb, cfg.Limits)
+		err = extract7z(extractCtx, node, filePath, sb, cfg.WorkDir, cfg.Limits)
 	case identify.InstallShieldCAB:
-		err = extractUnshield(extractCtx, node, filePath, sb, cfg.Limits)
+		err = extractUnshield(extractCtx, node, filePath, sb, cfg.WorkDir, cfg.Limits)
 	default:
 		node.Status = StatusSkipped
 		node.StatusDetail = fmt.Sprintf("no extraction handler for format %s", info.Format)
@@ -318,14 +318,14 @@ func recurseIntoDir(ctx context.Context, parent *ExtractionNode, dir string, par
 
 // extractZIP extracts a ZIP archive using Go's archive/zip stdlib.
 // Each entry header is validated by safeguard before any bytes are written.
-func extractZIP(ctx context.Context, node *ExtractionNode, filePath string, limits config.Limits, stats *safeguard.ExtractionStats) error {
+func extractZIP(ctx context.Context, node *ExtractionNode, filePath string, workDir string, limits config.Limits, stats *safeguard.ExtractionStats) error {
 	r, err := zip.OpenReader(filePath)
 	if err != nil {
 		return fmt.Errorf("extract: open zip %s: %w", filePath, err)
 	}
 	defer r.Close()
 
-	outDir, err := os.MkdirTemp("", "sbom-sentry-zip-*")
+	outDir, err := os.MkdirTemp(workDir, "sbom-sentry-zip-*")
 	if err != nil {
 		return fmt.Errorf("extract: create temp dir: %w", err)
 	}
@@ -429,7 +429,7 @@ func extractZIPEntry(f *zip.File, targetPath string, limits config.Limits) error
 
 // extractTAR extracts a TAR archive using Go's archive/tar stdlib.
 // If reader is nil, the file is opened directly.
-func extractTAR(ctx context.Context, node *ExtractionNode, filePath string, reader io.Reader, limits config.Limits, stats *safeguard.ExtractionStats) error {
+func extractTAR(ctx context.Context, node *ExtractionNode, filePath string, reader io.Reader, workDir string, limits config.Limits, stats *safeguard.ExtractionStats) error {
 	if reader == nil {
 		f, err := os.Open(filePath)
 		if err != nil {
@@ -439,7 +439,7 @@ func extractTAR(ctx context.Context, node *ExtractionNode, filePath string, read
 		reader = f
 	}
 
-	outDir, err := os.MkdirTemp("", "sbom-sentry-tar-*")
+	outDir, err := os.MkdirTemp(workDir, "sbom-sentry-tar-*")
 	if err != nil {
 		return fmt.Errorf("extract: create temp dir: %w", err)
 	}
@@ -546,7 +546,7 @@ func extractTAREntry(tr *tar.Reader, targetPath string, size int64, limits confi
 }
 
 // extractCompressedTAR handles gzip and bzip2 compressed TAR archives.
-func extractCompressedTAR(ctx context.Context, node *ExtractionNode, filePath string, compression string, limits config.Limits, stats *safeguard.ExtractionStats) error {
+func extractCompressedTAR(ctx context.Context, node *ExtractionNode, filePath string, compression string, workDir string, limits config.Limits, stats *safeguard.ExtractionStats) error {
 	f, err := os.Open(filePath)
 	if err != nil {
 		return fmt.Errorf("extract: open %s: %w", filePath, err)
@@ -568,13 +568,13 @@ func extractCompressedTAR(ctx context.Context, node *ExtractionNode, filePath st
 		return fmt.Errorf("extract: unsupported compression %s", compression)
 	}
 
-	return extractTAR(ctx, node, filePath, reader, limits, stats)
+	return extractTAR(ctx, node, filePath, reader, workDir, limits, stats)
 }
 
 // extract7z extracts CAB, MSI, 7z, or RAR files using 7-Zip via the sandbox.
 // After extraction, the output directory is validated by safeguard to detect
 // path traversal, symlinks, special files, and resource limit violations.
-func extract7z(ctx context.Context, node *ExtractionNode, filePath string, sb sandbox.Sandbox, limits config.Limits) error {
+func extract7z(ctx context.Context, node *ExtractionNode, filePath string, sb sandbox.Sandbox, workDir string, limits config.Limits) error {
 	// Check if 7zz is available.
 	if !isToolAvailable("7zz") {
 		node.Status = StatusToolMissing
@@ -583,7 +583,7 @@ func extract7z(ctx context.Context, node *ExtractionNode, filePath string, sb sa
 		return nil
 	}
 
-	outDir, err := os.MkdirTemp("", "sbom-sentry-7z-*")
+	outDir, err := os.MkdirTemp(workDir, "sbom-sentry-7z-*")
 	if err != nil {
 		return fmt.Errorf("extract: create temp dir: %w", err)
 	}
@@ -605,7 +605,7 @@ func extract7z(ctx context.Context, node *ExtractionNode, filePath string, sb sa
 // extractUnshield extracts InstallShield CABs using unshield via the sandbox.
 // After extraction, the output directory is validated by safeguard to detect
 // path traversal, symlinks, special files, and resource limit violations.
-func extractUnshield(ctx context.Context, node *ExtractionNode, filePath string, sb sandbox.Sandbox, limits config.Limits) error {
+func extractUnshield(ctx context.Context, node *ExtractionNode, filePath string, sb sandbox.Sandbox, workDir string, limits config.Limits) error {
 	if !isToolAvailable("unshield") {
 		node.Status = StatusToolMissing
 		node.StatusDetail = "unshield is not installed; cannot extract InstallShield CAB"
@@ -613,7 +613,7 @@ func extractUnshield(ctx context.Context, node *ExtractionNode, filePath string,
 		return nil
 	}
 
-	outDir, err := os.MkdirTemp("", "sbom-sentry-unshield-*")
+	outDir, err := os.MkdirTemp(workDir, "sbom-sentry-unshield-*")
 	if err != nil {
 		return fmt.Errorf("extract: create temp dir: %w", err)
 	}

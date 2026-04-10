@@ -131,6 +131,7 @@ func TestRootCmdFlagsExist(t *testing.T) {
 	expectedFlags := []string{
 		"config",
 		"output-dir",
+		"work-dir",
 		"format",
 		"policy",
 		"mode",

@@ -185,6 +185,40 @@ func TestExtractZIPProducesExtractionTree(t *testing.T) {
 	CleanupNode(tree)
 }
 
+// TestExtractUsesConfiguredWorkDir verifies that temporary extraction output
+// is created under the configured work directory for robust operator control.
+func TestExtractUsesConfiguredWorkDir(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	workDir := filepath.Join(dir, "work")
+	if err := os.MkdirAll(workDir, 0o750); err != nil {
+		t.Fatalf("create work dir: %v", err)
+	}
+
+	zipPath := createTestZIP(t, dir, "delivery.zip", map[string][]byte{
+		"readme.txt": []byte("Hello WorkDir"),
+	})
+
+	cfg := config.DefaultConfig()
+	cfg.InputPath = zipPath
+	cfg.OutputDir = dir
+	cfg.WorkDir = workDir
+	cfg.Unsafe = true
+
+	tree, err := Extract(context.Background(), zipPath, cfg, sandbox.NewPassthroughSandbox())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if tree.ExtractedDir == "" {
+		t.Fatal("ExtractedDir is empty")
+	}
+	if filepath.Dir(tree.ExtractedDir) != workDir {
+		t.Fatalf("ExtractedDir parent = %q, want %q", filepath.Dir(tree.ExtractedDir), workDir)
+	}
+
+	CleanupNode(tree)
+}
+
 // TestExtractTARGZProducesExtractionTree verifies that extracting a
 // gzip-compressed TAR archive works correctly. TAR.GZ is common in
 // Linux software deliveries.
@@ -353,7 +387,7 @@ func TestExtract7zMarksToolMissingWhenUnavailable(t *testing.T) {
 	})
 
 	node := &ExtractionNode{Format: identify.FormatInfo{Format: identify.CAB}}
-	err := extract7z(context.Background(), node, "/tmp/input.cab", sandbox.NewPassthroughSandbox(), config.DefaultLimits())
+	err := extract7z(context.Background(), node, "/tmp/input.cab", sandbox.NewPassthroughSandbox(), t.TempDir(), config.DefaultLimits())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -391,7 +425,7 @@ func TestExtract7zUsesSandboxOutputAndSummarizesFiles(t *testing.T) {
 	}}
 
 	node := &ExtractionNode{Format: identify.FormatInfo{Format: identify.CAB}}
-	err := extract7z(context.Background(), node, "/tmp/input.cab", sb, config.DefaultLimits())
+	err := extract7z(context.Background(), node, "/tmp/input.cab", sb, t.TempDir(), config.DefaultLimits())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -443,7 +477,7 @@ func TestExtractUnshieldPassesDestinationDirectory(t *testing.T) {
 	}}
 
 	node := &ExtractionNode{Format: identify.FormatInfo{Format: identify.InstallShieldCAB}}
-	err := extractUnshield(context.Background(), node, "/tmp/setup.cab", sb, config.DefaultLimits())
+	err := extractUnshield(context.Background(), node, "/tmp/setup.cab", sb, t.TempDir(), config.DefaultLimits())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -475,7 +509,7 @@ func TestExtract7zRejectsUnsafePostExtractionOutput(t *testing.T) {
 	}}
 
 	node := &ExtractionNode{Format: identify.FormatInfo{Format: identify.CAB}}
-	err := extract7z(context.Background(), node, "/tmp/input.cab", sb, config.DefaultLimits())
+	err := extract7z(context.Background(), node, "/tmp/input.cab", sb, t.TempDir(), config.DefaultLimits())
 	if err == nil {
 		t.Fatal("expected hard security error, got nil")
 	}

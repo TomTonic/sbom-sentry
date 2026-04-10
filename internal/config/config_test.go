@@ -62,6 +62,9 @@ func TestDefaultConfigHasSensibleValues(t *testing.T) {
 	if cfg.Language != "en" {
 		t.Errorf("Language = %q, want en", cfg.Language)
 	}
+	if cfg.WorkDir != os.TempDir() {
+		t.Errorf("WorkDir = %q, want %q", cfg.WorkDir, os.TempDir())
+	}
 }
 
 // TestParsePolicyModeAcceptsValidValues verifies that ParsePolicyMode
@@ -217,6 +220,9 @@ func TestConfigValidateRejectsInvalidConfig(t *testing.T) {
 		{"nonexistent input file", func(c *Config) { c.InputPath = "/nonexistent/file.zip" }, true},
 		{"input is directory", func(c *Config) { c.InputPath = tmpDir }, true},
 		{"unsupported language", func(c *Config) { c.Language = "fr" }, true},
+		{"missing work dir", func(c *Config) { c.WorkDir = "" }, true},
+		{"nonexistent work dir", func(c *Config) { c.WorkDir = "/nonexistent/work-dir" }, true},
+		{"work dir is file", func(c *Config) { c.WorkDir = inputFile }, true},
 		{"unsupported SBOM format", func(c *Config) { c.SBOMFormat = "spdx" }, true},
 		{"max-depth zero", func(c *Config) { c.Limits.MaxDepth = 0 }, true},
 		{"max-files zero", func(c *Config) { c.Limits.MaxFiles = 0 }, true},

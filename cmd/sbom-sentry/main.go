@@ -43,6 +43,7 @@ func rootCmd() *cobra.Command {
 	var (
 		configPath string
 		outputDir  string
+		workDir    string
 		sbomFormat string
 		policyStr  string
 		modeStr    string
@@ -149,6 +150,9 @@ Configuration can be set via:
 			if outputDir != "" {
 				cfg.OutputDir = outputDir
 			}
+			if workDir != "" {
+				cfg.WorkDir = workDir
+			}
 			if sbomFormat != "" {
 				cfg.SBOMFormat = sbomFormat
 			}
@@ -240,6 +244,7 @@ Configuration can be set via:
 
 	// CLI flags (also bound to viper for env var / config file support).
 	cmd.Flags().StringVarP(&outputDir, "output-dir", "o", ".", "Target directory for SBOM and report output")
+	cmd.Flags().StringVar(&workDir, "work-dir", defaults.WorkDir, "Base directory for temporary extraction work")
 	cmd.Flags().StringVar(&sbomFormat, "format", "cyclonedx-json", "SBOM output format")
 	cmd.Flags().StringVar(&policyStr, "policy", "strict", "Policy mode: strict (abort on limit) or partial (skip and continue)")
 	cmd.Flags().StringVar(&modeStr, "mode", "installer-semantic", "Interpretation mode: physical or installer-semantic")
