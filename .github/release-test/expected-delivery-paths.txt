@@ -1,0 +1,9 @@
+release-happy-path.zip/fixture-app.jar
+release-happy-path.zip/fixture-level1.7z
+release-happy-path.zip/fixture-level1.7z/deep/fixture-app.jar
+release-happy-path.zip/fixture-level1.7z/deep/fixture-nested.cab
+release-happy-path.zip/fixture-level1.7z/deep/fixture-nested.tgz
+release-happy-path.zip/fixture-level1.7z/deep/fixture-nested.tgz/tgz_payload/nested-inside-tgz.jar
+release-happy-path.zip/fixture-nested.cab
+release-happy-path.zip/fixture-nested.tgz
+release-happy-path.zip/fixture-nested.tgz/tgz_payload/nested-inside-tgz.jar
