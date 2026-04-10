@@ -38,15 +38,17 @@ Additional Go compression modules (only if the corresponding TAR variant must be
 
 | Binary | Purpose | Rationale |
 |---|---|---|
-| **7-Zip** (`7zz`) | Extract CAB and MSI files | No viable pure-Go library exists for Microsoft CAB or MSI (OLE compound document) formats. 7-Zip handles both natively, is widely packaged on Linux, and is the preferred extractor per DESIGN.md §9.2. It also covers 7z and RAR inputs if encountered, though those are uncommon in vendor deliveries. 7-Zip is the **only** external binary dependency for extraction. |
-| **Bubblewrap** (`bwrap`) | Sandbox for 7-Zip invocations | Lightweight Linux namespace sandbox (LGPL-2.1). Used by Flatpak. Provides mount, PID, network, and IPC namespace isolation without requiring root or Docker. Applied to all `7zz` invocations. |
+| **7-Zip** (`7zz`) | Extract Microsoft CAB and MSI files; also 7z and RAR if encountered | No viable pure-Go library exists for Microsoft CAB or MSI (OLE compound document) formats. 7-Zip handles both natively, is widely packaged on Linux, and is the preferred extractor per DESIGN.md §9.2. |
+| **unshield** | Extract InstallShield CAB files (`data1.cab` + `data1.hdr`) | InstallShield uses a proprietary cabinet format incompatible with Microsoft CABs. `unshield` (MIT, actively maintained, v1.6.2) is the only tool capable of extracting these. Available via Linux package managers and Homebrew. |
+| **Bubblewrap** (`bwrap`) | Sandbox for all external binary invocations (`7zz`, `unshield`) | Lightweight Linux namespace sandbox (LGPL-2.1). Used by Flatpak. Provides mount, PID, network, and IPC namespace isolation without requiring root or Docker. |
 
 ### 1.3 Tool Availability Strategy
 
 | Mechanism | Available | Not Available |
 |---|---|---|
-| `bwrap` | All `7zz` invocations are sandboxed | User must pass `--unsafe` flag; extraction runs unsandboxed. Prominently flagged in report. |
-| `7zz` | CAB/MSI extraction proceeds normally. Also used for 7z/RAR inputs if encountered. | CAB/MSI/7z/RAR archives are recorded as non-extractable components in the SBOM. Audit report notes missing tool. |
+| `bwrap` | All external binary invocations (`7zz`, `unshield`) are sandboxed | User must pass `--unsafe` flag; extraction runs unsandboxed. Prominently flagged in report. |
+| `7zz` | Microsoft CAB/MSI extraction proceeds normally. Also handles 7z/RAR inputs. | Microsoft CAB/MSI/7z/RAR archives are recorded as non-extractable components in the SBOM. Audit report notes missing tool. |
+| `unshield` | InstallShield CAB extraction proceeds normally. | InstallShield CABs are recorded as non-extractable components in the SBOM. Audit report notes missing tool. |
 | Syft (library) | Required | Fatal error. |
 
 ### 1.4 Why Go Standard Library over mholt/archives
@@ -167,9 +169,17 @@ raw 7-Zip extraction alone.
 **InstallShield CABs.** InstallShield uses a proprietary cabinet format that is
 *not* compatible with Microsoft CABs. Files typically arrive as `data1.cab` +
 `data1.hdr`. Neither 7-Zip nor `cabextract` can unpack these; the tool
-`unshield` is required. InstallShield support is not currently in scope. If
-encountered, such files are recorded as non-extractable components in the SBOM
-and flagged in the audit report.
+`unshield` is required.
+
+When `unshield` is installed, sbom-sentry extracts InstallShield CABs via the
+sandbox interface (same pattern as 7-Zip) and recurses into the extracted contents.
+When `unshield` is not installed, such files are recorded as non-extractable
+components in the SBOM and flagged in the audit report.
+
+Detection heuristic: a file named `data1.cab` accompanied by `data1.hdr` (or
+`data2.cab`, etc.) in the same directory is treated as an InstallShield cabinet
+set. Additionally, the `identify` module checks for the InstallShield magic bytes
+(`ISc(` at offset 0) to distinguish InstallShield CABs from Microsoft CABs.
 
 ---
 
@@ -271,11 +281,11 @@ it natively or whether sbom-sentry needs to extract it.
 **Interface:**
 ```go
 type FormatInfo struct {
-    Format     Format   // ZIP, TAR, GzipTAR, Bzip2TAR, XzTAR, ZstdTAR, CAB, MSI, SevenZip, RAR, Unknown
+    Format     Format   // ZIP, TAR, GzipTAR, Bzip2TAR, XzTAR, ZstdTAR, CAB, MSI, SevenZip, RAR, InstallShieldCAB, Unknown
     MIMEType   string
     Extension  string
     SyftNative bool     // true if Syft already understands this format (JAR, RPM, DEB, etc.)
-    Extractable bool   // true if we can extract it (Go stdlib or 7z)
+    Extractable bool   // true if we can extract it (Go stdlib or 7z or unshield)
 }
 
 func Identify(ctx context.Context, path string) (FormatInfo, error)
@@ -287,7 +297,8 @@ func Identify(ctx context.Context, path string) (FormatInfo, error)
     formats (JAR/WAR/EAR via manifest, .whl/.egg via extension, .nupkg,
     .apk, etc.). If Syft-native → `SyftNative = true`.
   - TAR: `ustar` at offset 257
-  - CAB: `MSCF` at offset 0
+  - CAB (Microsoft): `MSCF` at offset 0
+  - CAB (InstallShield): `ISc(` at offset 0, or `data*.cab`/`data*.hdr` naming pattern
   - MSI: OLE compound document `D0 CF 11 E0 A1 B1 1A E1` at offset 0
   - 7z: `7z\xBC\xAF\x27\x1C` at offset 0
   - RAR: `Rar!\x1A\x07` at offset 0
@@ -375,6 +386,7 @@ bwrap \
 - `--new-session` mitigates `TIOCSTI` injection.
 - `Resolve()` checks `Available()` on the bwrap sandbox; if unavailable and
   `cfg.Unsafe == true`, returns passthrough; otherwise returns an error.
+- The same sandbox interface is used for both `7zz` and `unshield` invocations.
 - Every invocation is logged with the sandbox name for the audit trail.
 
 ---
@@ -396,7 +408,7 @@ type ExtractionNode struct {
     StatusDetail  string
     ExtractedDir  string         // filesystem path of extracted contents (empty if SyftNative)
     Children      []*ExtractionNode
-    Tool          string         // "archive/zip" | "archive/tar" | "7zz" | "syft"
+    Tool          string         // "archive/zip" | "archive/tar" | "7zz" | "unshield" | "syft"
     SandboxUsed   string         // "bwrap" | "passthrough" | ""
     Duration      time.Duration
     EntriesCount  int
@@ -420,8 +432,7 @@ For each file encountered:
      → extract:
         ├─ ZIP                 → Go stdlib archive/zip (in-process, per-entry safeguard)
         ├─ TAR / compressed TAR → Go stdlib archive/tar + compress/* (in-process, per-entry safeguard)
-        ├─ CAB, MSI, 7z, RAR   → 7zz via sandbox (post-extraction safeguard walk)
-        └─ Unknown container   → mark as non-extractable leaf
+        ├─ CAB, MSI, 7z, RAR   → 7zz via sandbox (post-extraction safeguard walk)        ├─ InstallShield CAB    → unshield via sandbox (post-extraction safeguard walk)        └─ Unknown container   → mark as non-extractable leaf
      → for each extracted child: recurse (depth + 1)
   4. If not a container format:
      → mark as plain leaf (will be picked up by Syft when its parent directory is scanned)
@@ -718,17 +729,24 @@ Two distinct categories, enforced at different layers:
 The `--unsafe` flag affects only the sandbox requirement, never the
 hard security checks.
 
-### 5.4 Single External Binary
+### 5.4 External Binaries: 7-Zip and unshield
 
-7-Zip is the only external binary dependency for extraction. Its role is
-limited to formats where no viable pure-Go library exists: Microsoft CAB
-and MSI (OLE compound documents). As a side effect, 7-Zip also handles
-7z and RAR inputs if encountered, though those are uncommon.
+7-Zip and unshield are the only external binary dependencies for
+extraction. Their roles are strictly partitioned:
+
+- **7-Zip** covers Microsoft CAB, MSI (OLE compound documents), plus
+  7z and RAR inputs if encountered.
+- **unshield** covers InstallShield proprietary CABs — a format that no
+  other tool (including 7-Zip) can handle.
 
 For ZIP and TAR — the dominant delivery formats — Go's standard library
 provides mature, streaming extraction with per-entry validation callbacks.
 This eliminates the need for an external extractor and the associated
 sandbox overhead in the common case.
+
+Both external binaries are optional at runtime. If either is missing, the
+corresponding format is recorded as non-extractable in the SBOM. Both
+are always invoked through the sandbox interface when available.
 
 ### 5.5 Syft-First Principle
 
@@ -748,7 +766,69 @@ This principle has three benefits:
 sbom-sentry only extracts "dumb" container formats (ZIP, TAR, CAB, MSI)
 that Syft cannot see through, in order to present their contents to Syft.
 
-### 5.6 Deterministic Output
+### 5.6 Downstream Vulnerability Matching (CPE / PURL)
+
+sbom-sentry does not perform CVE scanning itself (see DESIGN.md §1.3),
+but the SBOM it produces must be immediately usable by tools like
+**Grype** for vulnerability matching. Grype matches packages against
+vulnerability databases using two identifiers:
+
+1. **Package URL (PURL)** — the primary match path for ecosystem packages.
+2. **CPE (Common Platform Enumeration)** — the match path for binaries
+   and packages without ecosystem-specific identifiers.
+
+**How Syft generates these identifiers.** Syft's catalogers produce both
+PURLs and CPEs automatically:
+
+| Cataloger type | PURL generation | CPE generation |
+|---|---|---|
+| Ecosystem catalogers (Java, npm, Python, Go, Ruby, .NET, etc.) | From package manifest metadata (pom.xml, package.json, requirements.txt, go.sum, etc.) | Heuristic: derived from package name + vendor heuristics, NVD dictionary lookup, or declared by package metadata |
+| Binary classifier cataloger | n/a (no ecosystem) | Pattern-matched from known binary signatures (e.g. `openssl`, `curl`, `nginx`) |
+| PE binary cataloger | n/a | Derived from Windows PE Version Info resource (ProductName, CompanyName, FileVersion) |
+| ELF package cataloger | From `.note` section or embedded metadata | Derived from ELF metadata |
+
+**Why the Syft-first principle is critical for vulnerability matching.**
+
+If sbom-sentry were to extract a JAR file into a flat directory and then
+scan that directory, Syft would see individual `.class` files and a
+`MANIFEST.MF` — it could still identify the Java package, but it would
+lose the JAR-level context (filename, embedded pom.xml properties). By
+passing the JAR directly to Syft, the Java cataloger gets the full
+package metadata, produces the correct Maven PURL
+(`pkg:maven/group/artifact@version`), and generates accurate CPEs.
+
+The same applies to RPM, DEB, wheel, nupkg, and other ecosystem formats.
+
+**Known limitations for raw binaries (DLLs, EXEs).**
+
+When vendor deliveries contain standalone Windows binaries (not packaged
+in an ecosystem format), Syft relies on:
+- The **binary classifier** — a set of known signatures for common open-source
+  libraries (OpenSSL, zlib, libcurl, etc.). If a binary matches, Syft
+  produces a CPE with the correct vendor/product/version.
+- The **PE binary cataloger** — reads the Version Info resource embedded
+  in PE files. This yields a product name, company name, and version, from
+  which Syft generates a CPE like
+  `cpe:2.3:a:<company>:<product>:<version>:*:*:*:*:*:*:*`.
+
+If a vendor strips Version Info metadata or delivers a binary that does
+not match any known classifier, Syft cannot identify it. In this case:
+- The file still appears as a `Component` in the SBOM (of type `File`,
+  with SHA-256 hash), but without CPE or PURL.
+- The audit report flags these files under "unidentified binaries"
+  as a coverage gap.
+- This is an inherent limitation of any SBOM tool and is not specific
+  to sbom-sentry's architecture.
+
+**MSI name-mangling and CPE impact.** In physical mode, mangled internal
+CAB entry names from MSI packages are passed to Syft as-is. Since Syft's
+binary classifier and PE cataloger work on file *contents* (signatures
+and embedded metadata), not on filenames, this does not affect CPE
+generation. Filenames only matter for matching ecosystem package archives
+(e.g. `foo-1.2.3.jar`), but those are handled via the Syft-first
+principle and never reach the MSI extraction path.
+
+### 5.7 Deterministic Output
 
 - Components are sorted by BOMRef before encoding.
 - Dependencies are sorted by Ref.
