@@ -149,39 +149,180 @@ Result:
 
 ## Parameters by Concern
 
-Input/output:
+### Input/Output
 
-- positional `<input-file>`
-- `--output-dir`
-- `--work-dir`
+**positional `<input-file>`**
 
-Policy and interpretation:
+The delivery file to analyze. Can be archive (ZIP, TAR, CAB, MSI, 7z, RAR,
+InstallShield CAB) or container (OCI image, Docker archive).
 
-- `--policy strict|partial`
-- `--mode physical|installer-semantic`
-- `--report human|machine|both`
-- `--language en|de`
+**`--output-dir` (required)**
 
-Root metadata:
+Writable directory where SBOM and report files are written. Created if
+missing. Files are named after the input file:
 
-- `--root-manufacturer`
-- `--root-name`
-- `--root-version`
-- `--root-delivery-date` (YYYY-MM-DD)
-- `--root-property key=value` (repeatable)
+```
+--output-dir out → out/delivery.cdx.json, out/delivery.report.md
+```
 
-Safety/resource limits:
+**`--work-dir`**
 
-- `--max-depth`
-- `--max-files`
-- `--max-size`
-- `--max-entry-size`
-- `--max-ratio`
-- `--timeout` (duration, e.g. `60s`)
+Temporary directory for extraction and scratch storage. Defaults to system
+temp (`/tmp` on Linux/macOS). Useful for:
 
-Sandboxing:
+- Performance: use fast local SSD instead of network mount
+- Debugging: inspect unprocessed extractions (preserved if scan fails)
+- Disk isolation: keep temporary files separate from output
 
-- `--unsafe` enables unsandboxed external extraction when sandbox is unavailable
+### Policy and Interpretation
+
+**`--policy strict|partial` (default: strict)**
+
+Controls behavior when a nested archive violates safety limits (depth, file
+count, compression ratio).
+
+- `strict`: stops processing immediately, exits with code 2. Use in security
+  gates where violations must fail the build.
+- `partial`: marks violating subtree as incomplete, continues with other
+  subtrees. Useful for analyzing large/complex deliveries despite one problem
+  area. Exit code becomes 1 (partial).
+
+Example: a 500-file nested archive might violate `--max-files`, but other
+branches should still be scanned.
+
+**`--mode physical|installer-semantic` (default: installer-semantic)**
+
+Determines how installer packages (MSI, CAB) are interpreted.
+
+- `physical`: extracts all contained files as-is (layer 0 = extracted, layer
+  1 = nested content inside extracted files).
+- `installer-semantic`: attempts to parse installer semantics and identify
+  software components from metadata (more accurate for setup bundles, better
+  traceability). This is the recommended default.
+
+Override to `physical` only for raw archive analysis where installer metadata
+is not relevant.
+
+**`--report human|machine|both` (default: human)**
+
+Output format for the audit report.
+
+- `human`: Markdown file (`*.report.md`), readable for manual review.
+- `machine`: JSON file (`*.report.json`), structured for tooling/CI
+  integration.
+- `both`: both formats written.
+
+**`--language en|de` (default: en)**
+
+Language for human-readable report. German (`de`) translates all narrative
+text; SBOM and machine report remain English.
+
+### Root Metadata
+
+Annotates the root component in the SBOM with procurement/supplier context.
+Used in supply chain traceability workflows.
+
+**`--root-manufacturer`**
+
+Supplier/vendor name. Appears in SBOM root component metadata.
+
+**`--root-name`**
+
+Product name. Identifies what was delivered (e.g., "Widget Suite").
+
+**`--root-version`**
+
+Product version (e.g., "2026.04"). Should match version naming scheme.
+
+**`--root-delivery-date` (format: YYYY-MM-DD)**
+
+Date delivery was received or prepared for analysis. ISO 8601 format.
+
+**`--root-property key=value` (repeatable)**
+
+Custom metadata as key-value pairs. Can be used multiple times:
+
+```bash
+--root-property contract=4711 \
+--root-property channel=partner \
+--root-property risk-level=medium
+```
+
+All properties appear in SBOM root component and report metadata.
+
+### Safety/Resource Limits
+
+Prevent runaway processing (DoS, resource exhaustion) on malicious or
+accidentally-complex deliveries. Defaults are conservative:
+
+- `MaxDepth`: 6 (typical complex nested archive: 3–4 levels)
+- `MaxFiles`: 200,000
+- `MaxTotalSize`: 20 GiB
+- `MaxEntrySize`: 2 GiB (single file inside archive)
+- `MaxRatio`: 150 (compression ratio; e.g., 1 MiB → 150 MiB after
+  extraction)
+- `Timeout`: 60 seconds
+
+When a limit is exceeded **and** `--policy strict`, exit code is 2 (hard
+failure). With `--policy partial`, the violating subtree is skipped.
+
+**`--max-depth`**
+
+Maximum nesting levels. ZIP→TAR→TAR = 3. Use higher values for known complex
+deliveries from partners. Each level deeper increases attack surface.
+
+**`--max-files`**
+
+Total file count across all extractions. Bomb-like archives can create
+millions of zero-byte files. Increase only if you trust the delivery source.
+
+**`--max-size`**
+
+Total bytes extracted before stopping. Protects disk space on CI workers.
+
+**`--max-entry-size`**
+
+Size of any single file inside an archive. Prevents extracting a single
+compressed multi-gigabyte blob that explodes.
+
+**`--max-ratio`**
+
+Compression ratio (extracted bytes ÷ compressed bytes). Ratio > 150 is
+suspicious (e.g., 10 MiB compressed → 1.5 GiB extracted suggests compression
+bomb). Typical files: ratio 1–5.
+
+**`--timeout`**
+
+Go duration string (e.g., `60s`, `5m`). Hard stop if any single extraction
+operation (per-archive) exceeds this time. Prevents hangs when processing
+malicious or accidentally complex archives in CI.
+
+### Sandboxing
+
+**`--unsafe`**
+
+Disable external extractor sandboxing. External tools (`7zz`, `unshield`) run
+without isolation constraints.
+
+**When to use:**
+
+- macOS/BSD: `bwrap` is unavailable on these platforms; `--unsafe` is the
+  default behavior there.
+- WSL/Docker container: no `bwrap` available; use `--unsafe` instead.
+- Trusted vendor input: when the delivery source is cryptographically verified
+  or from a known partner with established trust.
+- Development machine analyzing own artifacts.
+
+**When NOT to use:**
+
+- Untrusted external input in production.
+- Public-facing services analyzing arbitrary user-uploaded files.
+- Strict security gates in hardened CI environments (always require sandbox on
+  Linux with `bwrap` available).
+
+On Linux with `bwrap` available and without `--unsafe`, extraction runs in an
+isolated namespace (restricted access to filesystem, network, IPC). This is
+the secure default on Linux.
 
 ## Reading the Outputs
 
