@@ -219,6 +219,7 @@ func TestConfigValidateRejectsInvalidConfig(t *testing.T) {
 		{"missing output dir", func(c *Config) { c.OutputDir = "" }, true},
 		{"nonexistent input file", func(c *Config) { c.InputPath = "/nonexistent/file.zip" }, true},
 		{"input is directory", func(c *Config) { c.InputPath = tmpDir }, true},
+		{"output dir is file", func(c *Config) { c.OutputDir = inputFile }, true},
 		{"unsupported language", func(c *Config) { c.Language = "fr" }, true},
 		{"missing work dir", func(c *Config) { c.WorkDir = "" }, true},
 		{"nonexistent work dir", func(c *Config) { c.WorkDir = "/nonexistent/work-dir" }, true},
@@ -242,6 +243,46 @@ func TestConfigValidateRejectsInvalidConfig(t *testing.T) {
 				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+// TestConfigValidateRejectsNonWritableOutputDir verifies that output artifact
+// paths fail fast when the target directory exists but cannot be written.
+func TestConfigValidateRejectsNonWritableOutputDir(t *testing.T) {
+	dir := t.TempDir()
+	inputFile := filepath.Join(dir, "test.zip")
+	if err := os.WriteFile(inputFile, []byte("test"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	outputDir := filepath.Join(dir, "readonly-output")
+	if err := os.MkdirAll(outputDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	// #nosec G302 -- test fixture intentionally removes write permission to validate rejection.
+	if err := os.Chmod(outputDir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		// #nosec G302 -- restore original test fixture permissions for cleanup.
+		if err := os.Chmod(outputDir, 0o750); err != nil {
+			t.Fatalf("restore output dir permissions: %v", err)
+		}
+	}()
+
+	probeFile := filepath.Join(outputDir, "probe")
+	if _, err := os.Create(probeFile); err == nil {
+		_ = os.Remove(probeFile)
+		t.Skip("current user can still write to readonly-output; skipping non-writable directory check")
+	}
+
+	cfg := DefaultConfig()
+	cfg.InputPath = inputFile
+	cfg.OutputDir = outputDir
+	cfg.WorkDir = dir
+
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected Validate to reject non-writable output directory")
 	}
 }
 
