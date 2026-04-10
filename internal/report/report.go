@@ -150,11 +150,15 @@ func GenerateHuman(data ReportData, lang string, w io.Writer) error {
 	// Scan results.
 	fmt.Fprintf(w, "## %s\n\n", t.scanSection)
 	for _, sr := range data.Scans {
+		evidencePaths := scan.FlattenEvidencePaths(sr)
 		switch {
 		case sr.Error != nil:
 			fmt.Fprintf(w, "- **%s**: %s %v\n", sr.NodePath, t.scanError, sr.Error)
 		case sr.BOM != nil && sr.BOM.Components != nil:
 			fmt.Fprintf(w, "- **%s**: %d %s\n", sr.NodePath, len(*sr.BOM.Components), t.componentsFound)
+			for _, evidencePath := range evidencePaths {
+				fmt.Fprintf(w, "  - evidence-path: `%s`\n", evidencePath)
+			}
 		default:
 			fmt.Fprintf(w, "- **%s**: %s\n", sr.NodePath, t.noComponents)
 		}
@@ -293,9 +297,10 @@ type machineNode struct {
 }
 
 type machineScan struct {
-	NodePath       string `json:"nodePath"`
-	ComponentCount int    `json:"componentCount"`
-	Error          string `json:"error,omitempty"`
+	NodePath       string   `json:"nodePath"`
+	ComponentCount int      `json:"componentCount"`
+	EvidencePaths  []string `json:"evidencePaths,omitempty"`
+	Error          string   `json:"error,omitempty"`
 }
 
 type machineDecision struct {
@@ -339,6 +344,7 @@ func buildMachineScans(scans []scan.ScanResult) []machineScan {
 		if s.BOM != nil && s.BOM.Components != nil {
 			ms.ComponentCount = len(*s.BOM.Components)
 		}
+		ms.EvidencePaths = scan.FlattenEvidencePaths(s)
 		result[i] = ms
 	}
 	return result

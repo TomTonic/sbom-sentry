@@ -5,9 +5,14 @@
 package scan
 
 import (
+	"archive/zip"
 	"context"
 	"os"
+	"path/filepath"
+	"reflect"
 	"testing"
+
+	cdx "github.com/CycloneDX/cyclonedx-go"
 
 	"github.com/sbom-sentry/internal/config"
 	"github.com/sbom-sentry/internal/extract"
@@ -164,8 +169,69 @@ func TestScanResultZeroValue(t *testing.T) {
 	if sr.BOM != nil {
 		t.Error("BOM is non-nil, want nil")
 	}
+	if sr.EvidencePaths != nil {
+		t.Error("EvidencePaths is non-nil, want nil")
+	}
 	if sr.Error != nil {
 		t.Error("Error is non-nil, want nil")
+	}
+}
+
+// TestCollectEvidencePathsFromJARManifest verifies that scan results can carry
+// deterministic evidence pointers for Syft-native JARs when a manifest exists.
+func TestCollectEvidencePathsFromJARManifest(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	jarPath := filepath.Join(dir, "app.jar")
+	f, err := os.Create(jarPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := zip.NewWriter(f)
+	manifest, err := w.Create("META-INF/MANIFEST.MF")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manifest.Write([]byte("Manifest-Version: 1.0\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	node := &extract.ExtractionNode{
+		Path:         "delivery.zip/lib/app.jar",
+		OriginalPath: jarPath,
+		Status:       extract.StatusSyftNative,
+		Format:       identify.FormatInfo{Format: identify.ZIP, SyftNative: true},
+	}
+	bom := &cdx.BOM{Components: &[]cdx.Component{{BOMRef: "pkg:maven/com.acme/app@1.0.0", Name: "app", Version: "1.0.0"}}}
+
+	evidence := collectEvidencePaths(node, jarPath, bom)
+	paths := evidence["pkg:maven/com.acme/app@1.0.0"]
+	if !reflect.DeepEqual(paths, []string{"delivery.zip/lib/app.jar/META-INF/MANIFEST.MF"}) {
+		t.Fatalf("evidence = %v, want manifest path", paths)
+	}
+}
+
+// TestFlattenEvidencePathsReturnsSortedUniqueValues verifies that report and
+// machine-report generation can safely flatten evidence paths without duplicates.
+func TestFlattenEvidencePathsReturnsSortedUniqueValues(t *testing.T) {
+	t.Parallel()
+
+	result := ScanResult{EvidencePaths: map[string][]string{
+		"a": {"z/path", "a/path"},
+		"b": {"a/path", "m/path"},
+	}}
+
+	got := FlattenEvidencePaths(result)
+	want := []string{"a/path", "m/path", "z/path"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("FlattenEvidencePaths() = %v, want %v", got, want)
 	}
 }
 

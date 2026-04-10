@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -256,6 +257,113 @@ func TestGenerateHumanWithScanResults(t *testing.T) {
 
 	if !strings.Contains(output, "2 components found") {
 		t.Error("report does not show component count")
+	}
+}
+
+// TestGenerateHumanIncludesNestedExtractionEvidenceAndPolicyDetails verifies
+// that the human report includes the full extraction tree, evidence paths, and
+// explanatory policy decisions for a nested delivery.
+func TestGenerateHumanIncludesNestedExtractionEvidenceAndPolicyDetails(t *testing.T) {
+	t.Parallel()
+
+	data := makeTestReportData()
+	data.Tree = &extract.ExtractionNode{
+		Path:   "delivery.cab",
+		Status: extract.StatusExtracted,
+		Format: identify.FormatInfo{Format: identify.CAB},
+		Tool:   "7zz",
+		Children: []*extract.ExtractionNode{{
+			Path:   "delivery.cab/layer.tar",
+			Status: extract.StatusExtracted,
+			Format: identify.FormatInfo{Format: identify.TAR},
+			Tool:   "archive/tar",
+			Children: []*extract.ExtractionNode{{
+				Path:   "delivery.cab/layer.tar/app.zip",
+				Status: extract.StatusExtracted,
+				Format: identify.FormatInfo{Format: identify.ZIP},
+				Tool:   "archive/zip",
+				Children: []*extract.ExtractionNode{{
+					Path:   "delivery.cab/layer.tar/app.zip/lib.jar",
+					Status: extract.StatusSyftNative,
+					Format: identify.FormatInfo{Format: identify.ZIP, SyftNative: true},
+					Tool:   "syft",
+				}},
+			}},
+		}},
+	}
+	data.Scans = []scan.ScanResult{{
+		NodePath: "delivery.cab/layer.tar/app.zip/lib.jar",
+		BOM: &cdx.BOM{Components: &[]cdx.Component{{
+			BOMRef:  "pkg:maven/com.acme/demo@1.0.0",
+			Name:    "demo",
+			Version: "1.0.0",
+		}}},
+		EvidencePaths: map[string][]string{
+			"pkg:maven/com.acme/demo@1.0.0": {"delivery.cab/layer.tar/app.zip/lib.jar/META-INF/MANIFEST.MF"},
+		},
+	}}
+	data.PolicyDecisions = []policy.Decision{{
+		Trigger:  "max-depth",
+		NodePath: "delivery.cab/layer.tar/deeper.zip",
+		Action:   policy.ActionSkip,
+		Detail:   "Resource limit max-depth exceeded at delivery.cab/layer.tar/deeper.zip (partial mode: skipping subtree)",
+	}}
+
+	var buf bytes.Buffer
+	if err := GenerateHuman(data, "en", &buf); err != nil {
+		t.Fatalf("GenerateHuman error: %v", err)
+	}
+	output := buf.String()
+
+	for _, fragment := range []string{
+		"delivery.cab",
+		"delivery.cab/layer.tar",
+		"delivery.cab/layer.tar/app.zip",
+		"delivery.cab/layer.tar/app.zip/lib.jar",
+		"1 components found",
+		"evidence-path: `delivery.cab/layer.tar/app.zip/lib.jar/META-INF/MANIFEST.MF`",
+		"max-depth",
+		"partial mode: skipping subtree",
+	} {
+		if !strings.Contains(output, fragment) {
+			t.Fatalf("report output missing %q", fragment)
+		}
+	}
+}
+
+// TestGenerateMachineIncludesEvidencePaths verifies that machine-readable scan
+// entries expose evidence paths for downstream automation.
+func TestGenerateMachineIncludesEvidencePaths(t *testing.T) {
+	t.Parallel()
+
+	data := makeTestReportData()
+	data.Scans = []scan.ScanResult{{
+		NodePath: "test.zip/lib.jar",
+		BOM:      &cdx.BOM{Components: &[]cdx.Component{{BOMRef: "pkg:maven/com.acme/demo@1.0.0"}}},
+		EvidencePaths: map[string][]string{
+			"pkg:maven/com.acme/demo@1.0.0": {"test.zip/lib.jar/META-INF/MANIFEST.MF"},
+		},
+	}}
+
+	var buf bytes.Buffer
+	if err := GenerateMachine(data, &buf); err != nil {
+		t.Fatalf("GenerateMachine error: %v", err)
+	}
+
+	var report struct {
+		Scans []struct {
+			NodePath      string   `json:"nodePath"`
+			EvidencePaths []string `json:"evidencePaths"`
+		} `json:"scans"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &report); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if len(report.Scans) != 1 {
+		t.Fatalf("machine report scans = %d, want 1", len(report.Scans))
+	}
+	if !reflect.DeepEqual(report.Scans[0].EvidencePaths, []string{"test.zip/lib.jar/META-INF/MANIFEST.MF"}) {
+		t.Fatalf("evidencePaths = %v, want manifest path", report.Scans[0].EvidencePaths)
 	}
 }
 

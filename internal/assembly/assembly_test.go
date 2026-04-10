@@ -6,6 +6,7 @@ package assembly
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	cdx "github.com/CycloneDX/cyclonedx-go"
@@ -79,6 +80,128 @@ func TestAssembleProducesValidBOM(t *testing.T) {
 	// Verify hash was computed.
 	if bom.Metadata.Component.Hashes == nil || len(*bom.Metadata.Component.Hashes) == 0 {
 		t.Error("root component has no hashes")
+	}
+}
+
+// TestAssembleNestedScenarioBuildsDependencyGraph verifies a realistic nested
+// container chain with merged scan results: CAB -> TAR -> ZIP -> JAR -> package.
+func TestAssembleNestedScenarioBuildsDependencyGraph(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	outerPath := filepath.Join(dir, "delivery.cab")
+	tarPath := filepath.Join(dir, "layer.tar")
+	zipPath := filepath.Join(dir, "app.zip")
+	jarPath := filepath.Join(dir, "lib.jar")
+	for _, file := range []string{outerPath, tarPath, zipPath, jarPath} {
+		if err := os.WriteFile(file, []byte(filepath.Base(file)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cfg := config.DefaultConfig()
+	cfg.InputPath = outerPath
+	cfg.OutputDir = dir
+
+	jarNodePath := "delivery.cab/layer.tar/app.zip/lib.jar"
+	tree := &extract.ExtractionNode{
+		Path:         "delivery.cab",
+		OriginalPath: outerPath,
+		Status:       extract.StatusExtracted,
+		Format:       identify.FormatInfo{Format: identify.CAB},
+		Children: []*extract.ExtractionNode{{
+			Path:         "delivery.cab/layer.tar",
+			OriginalPath: tarPath,
+			Status:       extract.StatusExtracted,
+			Format:       identify.FormatInfo{Format: identify.TAR},
+			Children: []*extract.ExtractionNode{{
+				Path:         "delivery.cab/layer.tar/app.zip",
+				OriginalPath: zipPath,
+				Status:       extract.StatusExtracted,
+				Format:       identify.FormatInfo{Format: identify.ZIP},
+				Children: []*extract.ExtractionNode{{
+					Path:         jarNodePath,
+					OriginalPath: jarPath,
+					Status:       extract.StatusSyftNative,
+					Format:       identify.FormatInfo{Format: identify.ZIP, SyftNative: true},
+				}},
+			}},
+		}},
+	}
+
+	scans := []scan.ScanResult{{
+		NodePath: jarNodePath,
+		BOM: &cdx.BOM{Components: &[]cdx.Component{{
+			BOMRef:  "pkg:maven/com.acme/demo@1.0.0",
+			Name:    "demo",
+			Version: "1.0.0",
+		}}},
+		EvidencePaths: map[string][]string{
+			"pkg:maven/com.acme/demo@1.0.0": {jarNodePath + "/META-INF/MANIFEST.MF"},
+		},
+	}}
+
+	bom, err := Assemble(tree, scans, cfg)
+	if err != nil {
+		t.Fatalf("Assemble error: %v", err)
+	}
+
+	if bom.Dependencies == nil {
+		t.Fatal("Dependencies is nil")
+	}
+
+	depsByRef := make(map[string][]string)
+	for _, dep := range *bom.Dependencies {
+		if dep.Dependencies != nil {
+			depsByRef[dep.Ref] = append([]string(nil), *dep.Dependencies...)
+		}
+	}
+
+	tarRef := makeBOMRef("delivery.cab/layer.tar")
+	zipRef := makeBOMRef("delivery.cab/layer.tar/app.zip")
+	jarRef := makeBOMRef(jarNodePath)
+	pkgRef := jarRef + "/pkg:maven/com.acme/demo@1.0.0"
+	rootRef := makeBOMRef("delivery.cab")
+
+	if !reflect.DeepEqual(depsByRef[rootRef], []string{tarRef}) {
+		t.Fatalf("root deps = %v, want [%s]", depsByRef[rootRef], tarRef)
+	}
+	if !reflect.DeepEqual(depsByRef[tarRef], []string{zipRef}) {
+		t.Fatalf("tar deps = %v, want [%s]", depsByRef[tarRef], zipRef)
+	}
+	if !reflect.DeepEqual(depsByRef[zipRef], []string{jarRef}) {
+		t.Fatalf("zip deps = %v, want [%s]", depsByRef[zipRef], jarRef)
+	}
+	if !reflect.DeepEqual(depsByRef[jarRef], []string{pkgRef}) {
+		t.Fatalf("jar deps = %v, want [%s]", depsByRef[jarRef], pkgRef)
+	}
+
+	if bom.Components == nil {
+		t.Fatal("Components is nil")
+	}
+
+	var packageFound bool
+	for _, comp := range *bom.Components {
+		if comp.BOMRef != pkgRef {
+			continue
+		}
+		packageFound = true
+		if comp.Properties == nil {
+			t.Fatal("merged package has no properties")
+		}
+		props := make(map[string][]string)
+		for _, prop := range *comp.Properties {
+			props[prop.Name] = append(props[prop.Name], prop.Value)
+		}
+		if !reflect.DeepEqual(props["sbom-sentry:delivery-path"], []string{jarNodePath}) {
+			t.Fatalf("delivery-path = %v, want [%s]", props["sbom-sentry:delivery-path"], jarNodePath)
+		}
+		if !reflect.DeepEqual(props["sbom-sentry:evidence-path"], []string{jarNodePath + "/META-INF/MANIFEST.MF"}) {
+			t.Fatalf("evidence-path = %v, want manifest path", props["sbom-sentry:evidence-path"])
+		}
+	}
+	if !packageFound {
+		t.Fatal("merged package component not found")
 	}
 }
 

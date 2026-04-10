@@ -8,11 +8,16 @@
 package scan
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
+	"path"
+	"path/filepath"
+	"sort"
+	"strings"
 
 	cdx "github.com/CycloneDX/cyclonedx-go"
 	"github.com/anchore/syft/syft"
@@ -25,9 +30,10 @@ import (
 // ScanResult holds the CycloneDX BOM produced by scanning a single
 // extraction node, along with metadata linking it back to the tree.
 type ScanResult struct { //nolint:revive // stuttering is acceptable for clarity
-	NodePath string   // matches ExtractionNode.Path
-	BOM      *cdx.BOM // CycloneDX BOM for this subtree/file
-	Error    error    // non-nil if scanning failed
+	NodePath      string              // matches ExtractionNode.Path
+	BOM           *cdx.BOM            // CycloneDX BOM for this subtree/file
+	EvidencePaths map[string][]string // optional component BOMRef -> supporting internal paths
+	Error         error               // non-nil if scanning failed
 }
 
 // Version is the sbom-sentry version string, set at build time.
@@ -155,4 +161,94 @@ func scanNode(ctx context.Context, result *ScanResult, root *extract.ExtractionN
 	}
 
 	result.BOM = bom
+	result.EvidencePaths = collectEvidencePaths(node, target, bom)
+}
+
+// collectEvidencePaths derives optional, deterministic evidence pointers for
+// scan results where sbom-sentry can name the specific internal file that
+// materially supports component identification.
+func collectEvidencePaths(node *extract.ExtractionNode, target string, bom *cdx.BOM) map[string][]string {
+	if node == nil || bom == nil || bom.Components == nil || len(*bom.Components) == 0 {
+		return nil
+	}
+
+	evidencePath := findManifestEvidencePath(node, target)
+	if evidencePath == "" {
+		return nil
+	}
+
+	evidence := make(map[string][]string, len(*bom.Components))
+	for i := range *bom.Components {
+		component := (*bom.Components)[i]
+		if component.BOMRef == "" {
+			continue
+		}
+		evidence[component.BOMRef] = []string{evidencePath}
+	}
+	if len(evidence) == 0 {
+		return nil
+	}
+
+	return evidence
+}
+
+// findManifestEvidencePath returns a delivery-relative pointer to a JAR-style
+// manifest when the scanned artifact is a Syft-native ZIP-based package that
+// actually contains such a manifest.
+func findManifestEvidencePath(node *extract.ExtractionNode, target string) string {
+	if node == nil || node.Status != extract.StatusSyftNative || !isManifestEvidenceCandidate(target) {
+		return ""
+	}
+
+	r, err := zip.OpenReader(target)
+	if err != nil {
+		return ""
+	}
+	defer r.Close()
+
+	for _, file := range r.File {
+		if strings.EqualFold(file.Name, "META-INF/MANIFEST.MF") {
+			return path.Clean(node.Path + "/" + file.Name)
+		}
+	}
+
+	return ""
+}
+
+func isManifestEvidenceCandidate(target string) bool {
+	switch strings.ToLower(filepath.Ext(target)) {
+	case ".jar", ".war", ".ear", ".jpi", ".hpi":
+		return true
+	default:
+		return false
+	}
+}
+
+// FlattenEvidencePaths returns the unique, sorted evidence paths associated
+// with a scan result across all discovered components.
+func FlattenEvidencePaths(result ScanResult) []string {
+	if len(result.EvidencePaths) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]struct{})
+	for _, paths := range result.EvidencePaths {
+		for _, evidencePath := range paths {
+			if evidencePath == "" {
+				continue
+			}
+			seen[evidencePath] = struct{}{}
+		}
+	}
+
+	if len(seen) == 0 {
+		return nil
+	}
+
+	flattened := make([]string, 0, len(seen))
+	for evidencePath := range seen {
+		flattened = append(flattened, evidencePath)
+	}
+	sort.Strings(flattened)
+	return flattened
 }

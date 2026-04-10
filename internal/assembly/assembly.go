@@ -146,6 +146,9 @@ func Assemble(tree *extract.ExtractionNode, scans []scan.ScanResult, cfg config.
 	sort.Slice(dependencies, func(i, j int) bool {
 		return dependencies[i].Ref < dependencies[j].Ref
 	})
+	for i := range dependencies {
+		sortDependencyRefs(&dependencies[i])
+	}
 
 	if len(components) > 0 {
 		bom.Components = &components
@@ -271,6 +274,7 @@ func processNode(node *extract.ExtractionNode, components *[]cdx.Component, depe
 		if sr.BOM.Components != nil {
 			for i := range *sr.BOM.Components {
 				comp := (*sr.BOM.Components)[i]
+				originalRef := comp.BOMRef
 				// Namespace BOMRef to avoid collisions.
 				comp.BOMRef = nodeRef + "/" + comp.BOMRef
 
@@ -279,15 +283,13 @@ func processNode(node *extract.ExtractionNode, components *[]cdx.Component, depe
 				props := []cdx.Property{
 					{Name: "sbom-sentry:delivery-path", Value: deliveryPath},
 				}
+				for _, evidencePath := range sr.EvidencePaths[originalRef] {
+					props = append(props, cdx.Property{Name: "sbom-sentry:evidence-path", Value: evidencePath})
+				}
 				if comp.Properties != nil {
 					props = append(props, *comp.Properties...)
 				}
-				sort.Slice(props, func(i, j int) bool {
-					if props[i].Name == props[j].Name {
-						return props[i].Value < props[j].Value
-					}
-					return props[i].Name < props[j].Name
-				})
+				props = uniqueSortedProperties(props)
 				comp.Properties = &props
 
 				*components = append(*components, comp)
@@ -326,6 +328,41 @@ func processNode(node *extract.ExtractionNode, components *[]cdx.Component, depe
 			*parentDep.Dependencies = append(*parentDep.Dependencies, *nodeDep.Dependencies...)
 		}
 	}
+}
+
+func sortDependencyRefs(dep *cdx.Dependency) {
+	if dep == nil || dep.Dependencies == nil {
+		return
+	}
+	sort.Slice(*dep.Dependencies, func(i, j int) bool {
+		return (*dep.Dependencies)[i] < (*dep.Dependencies)[j]
+	})
+}
+
+func uniqueSortedProperties(props []cdx.Property) []cdx.Property {
+	if len(props) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]struct{}, len(props))
+	unique := make([]cdx.Property, 0, len(props))
+	for _, prop := range props {
+		key := prop.Name + "\x00" + prop.Value
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		unique = append(unique, prop)
+	}
+
+	sort.Slice(unique, func(i, j int) bool {
+		if unique[i].Name == unique[j].Name {
+			return unique[i].Value < unique[j].Value
+		}
+		return unique[i].Name < unique[j].Name
+	})
+
+	return unique
 }
 
 // WriteSBOM writes the consolidated CycloneDX BOM to the specified file path.
