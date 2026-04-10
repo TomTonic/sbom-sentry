@@ -7,11 +7,14 @@ sbom-sentry is a tool for the **standardized incoming inspection of software del
 Its primary function is to make complex vendor deliveries auditable, reproducible,
 and suitable for downstream vulnerability assessment.
 
-Given exactly one ZIP archive as input, sbom-sentry produces:
+Given exactly one delivery file as input, sbom-sentry produces:
 
 1. A **single, consolidated Software Bill of Materials (SBOM)**  
    - Default format: **CycloneDX JSON**
 2. A **formal audit report** explaining what was processed, how, and with which limitations
+
+The input is intentionally restricted to **one file per run**. The file type may be
+ZIP, TAR, compressed TAR, MSI, or another supported delivery/container format.
 
 The tool is designed for procurement, compliance, and security assurance contexts,
 including dispute resolution with suppliers.
@@ -54,7 +57,7 @@ a convenience wrapper, not as a mandatory runtime dependency.
 ## 3. Core Processing Model
 
 ### 3.1 End-to-End Flow
-1. Validate the input ZIP (existence, format, size, cryptographic hash)
+1. Validate the input file (existence, supported format, size, cryptographic hash)
 2. Prepare an isolated working context
 3. Recursively analyze the delivery contents:
    - Identify container formats
@@ -94,7 +97,16 @@ Every extraction attempt must be recorded, including:
 - Extraction tool used
 - Outcome and reason
 
-### 4.3 Special Handling: CAB Files from Setup.exe/MSI Contexts
+### 4.3 Extraction Interpretation Modes
+The system shall support at least two configurable interpretation modes:
+
+- **physical**: model only artifacts that are directly present or can be materially extracted
+- **installer-semantic** (default): additionally model installer-derived relationships and
+   reconstructed contents when they can be derived with defensible confidence
+
+The selected mode must be included in the audit report and, where relevant, in SBOM metadata.
+
+### 4.4 Special Handling: CAB Files from Setup.exe/MSI Contexts
 
 Vendor deliveries frequently use setup.exe wrappers that internally unpack CAB files, sometimes in combination with MSI installers. These CAB files may exhibit name mangling or non-standard filenames due to legacy packaging tools.
 
@@ -155,6 +167,16 @@ The extraction logic must robustly prevent:
 - Materialization of special files (devices, pipes)
 - Inheritance of unsafe permissions
 
+### 6.3 Explicit Unsafe Override Mode
+If the preferred technical isolation mechanism is unavailable, the operator may explicitly opt into
+an unsafe recursive extraction mode via a dedicated command-line parameter.
+
+This mode:
+- Is intended only for controlled environments and forensic fallback use
+- May relax normal isolation and completeness-oriented resource limits
+- Must never silently activate
+- Must be highlighted prominently in the audit output and machine-readable report metadata
+
 ---
 
 ## 7. Policy Model
@@ -164,7 +186,6 @@ Policy determines behavior when limits are reached:
 
 - **strict** (default): abort processing, document fully
 - **partial**: skip offending subtree, continue elsewhere, document clearly
-- **never**: avoid aborting except when unavoidable
 
 ### 7.2 Policy Transparency
 All policy decisions must be explicitly recorded in the audit report,
@@ -187,6 +208,8 @@ Suitable lightweight mechanisms include:
 No specific mechanism is mandated, but:
 - Docker must **not** be assumed
 - Isolation failures must be detectable and reportable
+- The concrete isolation mechanism is a solution design decision and must be documented,
+  including fallback behavior when it is unavailable
 
 ---
 
@@ -197,6 +220,7 @@ All relevant code must be written in **Go**.
 
 ### 9.2 External Dependencies
 - Dependencies on external binaries and libraries must be kept minimal
+- The concrete selection of helper tools is a solution design decision and must be documented
 - **7-Zip** is the preferred general-purpose extractor
 - **Syft** is mandatory, preferably used in library mode
 
@@ -212,18 +236,28 @@ The report must enable a third party to answer:
 
 ### 10.2 Language Support
 - Project language: English
-- Report output:
-  - English (default)
-  - German
+- Report output language:
+   - English (default)
+   - German
 - Additional languages must be easy to add
 
-### 10.3 Required Report Content
+### 10.3 Report Representation Modes
+The audit output shall support both of the following forms:
+
+- **Human-readable report** (default)
+- **Machine-readable report** for downstream automation
+
+The chosen output mode or modes must be selectable explicitly.
+
+### 10.4 Required Report Content
 At minimum:
 - Input identification (hashes, metadata)
 - Configuration and limits
+- Interpretation mode and policy mode
 - Full recursive extraction log
 - Tools and isolation used
 - SBOM modeling assumptions
+- Whether unsafe override mode was active
 - Summary of completeness and limitations
 - Explicit statement of residual risk and uncertainty
 
@@ -232,7 +266,7 @@ At minimum:
 ## 11. Acceptance Criteria
 sbom-sentry is complete when:
 
-- One container (e.g., ZIP-file) input yields exactly one SBOM and one audit report
+- One input file yields exactly one SBOM and one audit report
 - Nested container formats are processed safely and recursively
 - CAB and MSI contents are extractable and auditable
 - Containers always appear as SBOM components
