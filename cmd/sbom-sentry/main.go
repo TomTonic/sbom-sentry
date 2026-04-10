@@ -2,6 +2,16 @@
 // sbom-sentry is a tool for standardized incoming inspection of software
 // deliveries. Given a single delivery file, it produces a consolidated
 // CycloneDX SBOM and a formal audit report.
+//
+// Configuration is resolved from (in order of precedence):
+//  1. Command-line flags
+//  2. Environment variables (SBOM_SENTRY_<FLAG_NAME>)
+//  3. Configuration file (--config or auto-discovered)
+//  4. Built-in defaults
+//
+// Configuration files are YAML format and searched in:
+//   - Current directory: .sbom-sentry.yaml, .sbom-sentry.yml
+//   - Home directory: ~/.sbom-sentry.yaml
 package main
 
 import (
@@ -9,15 +19,19 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
+	"github.com/spf13/viper"
 
 	"github.com/sbom-sentry/internal/config"
 	"github.com/sbom-sentry/internal/orchestrator"
 )
 
-// version is set at build time via -ldflags.
-var version = "dev"
+// scriptVersion is set at build time via -ldflags.
+var scriptVersion = "dev"
 
 func main() {
 	if err := rootCmd().Execute(); err != nil {
@@ -26,13 +40,26 @@ func main() {
 }
 
 func rootCmd() *cobra.Command {
-	cfg := config.DefaultConfig()
-
 	var (
-		policyStr string
-		modeStr   string
-		reportStr string
-		rootProps []string
+		configPath string
+		outputDir  string
+		sbomFormat string
+		policyStr  string
+		modeStr    string
+		reportStr  string
+		language   string
+		mfg        string
+		name       string
+		version    string
+		delivDate  string
+		rootProps  []string
+		unsafe     bool
+		maxDepth   int
+		maxFiles   int
+		maxSize    int64
+		maxEntry   int64
+		maxRatio   int
+		timeout    string
 	)
 
 	cmd := &cobra.Command{
@@ -44,25 +71,115 @@ func rootCmd() *cobra.Command {
 
 It recursively extracts nested archives, invokes Syft for component
 cataloging, and merges all findings into a single SBOM with full
-delivery-path traceability.`,
-		Version: version,
+delivery-path traceability.
+
+Configuration can be set via:
+  - Command-line flags (highest precedence)
+  - Environment variables (SBOM_SENTRY_<FLAG_NAME>)
+  - Configuration file (YAML format)
+  - Built-in defaults (lowest precedence)`,
+		Version: scriptVersion,
 		Args:    cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// Initialize viper with config file support.
+			viper.SetConfigName(".sbom-sentry")
+			viper.SetConfigType("yaml")
+
+			// Search paths: current dir, home dir.
+			viper.AddConfigPath(".")
+			if home, err := os.UserHomeDir(); err == nil {
+				viper.AddConfigPath(home)
+			}
+
+			// Allow explicit config file via flag.
+			if configPath != "" {
+				viper.SetConfigFile(configPath)
+			}
+
+			// Try to read config file (ignore if not found).
+			_ = viper.ReadInConfig()
+
+			// Bind all flags to viper for env var and config file support.
+			viper.SetEnvPrefix("SBOM_SENTRY")
+			viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
+			viper.AutomaticEnv()
+			cmd.Flags().VisitAll(func(f *pflag.Flag) {
+				viper.BindPFlag(f.Name, f)
+			})
+
+			// Build config from viper (merges flags, env, config file, defaults).
+			cfg := config.DefaultConfig()
 			cfg.InputPath = args[0]
 
-			// Parse enum flags.
-			var err error
-			cfg.PolicyMode, err = config.ParsePolicyMode(policyStr)
-			if err != nil {
-				return err
+			// Parse string enums.
+			if policyStr != "" {
+				mode, err := config.ParsePolicyMode(policyStr)
+				if err != nil {
+					return err
+				}
+				cfg.PolicyMode = mode
 			}
-			cfg.InterpretMode, err = config.ParseInterpretMode(modeStr)
-			if err != nil {
-				return err
+
+			if modeStr != "" {
+				mode, err := config.ParseInterpretMode(modeStr)
+				if err != nil {
+					return err
+				}
+				cfg.InterpretMode = mode
 			}
-			cfg.ReportMode, err = config.ParseReportMode(reportStr)
-			if err != nil {
-				return err
+
+			if reportStr != "" {
+				mode, err := config.ParseReportMode(reportStr)
+				if err != nil {
+					return err
+				}
+				cfg.ReportMode = mode
+			}
+
+			// Copy scalar values.
+			if outputDir != "" {
+				cfg.OutputDir = outputDir
+			}
+			if sbomFormat != "" {
+				cfg.SBOMFormat = sbomFormat
+			}
+			if language != "" {
+				cfg.Language = language
+			}
+			if mfg != "" {
+				cfg.RootMetadata.Manufacturer = mfg
+			}
+			if name != "" {
+				cfg.RootMetadata.Name = name
+			}
+			if scriptVersion != "" {
+				cfg.RootMetadata.Version = scriptVersion
+			}
+			if delivDate != "" {
+				cfg.RootMetadata.DeliveryDate = delivDate
+			}
+			cfg.Unsafe = unsafe
+			if maxDepth > 0 {
+				cfg.Limits.MaxDepth = maxDepth
+			}
+			if maxFiles > 0 {
+				cfg.Limits.MaxFiles = maxFiles
+			}
+			if maxSize > 0 {
+				cfg.Limits.MaxTotalSize = maxSize
+			}
+			if maxEntry > 0 {
+				cfg.Limits.MaxEntrySize = maxEntry
+			}
+			if maxRatio > 0 {
+				cfg.Limits.MaxRatio = maxRatio
+			}
+			if timeout != "" {
+				dur, err := time.ParseDuration(timeout)
+				if err != nil {
+					return fmt.Errorf("invalid timeout: %v", err)
+				}
+				cfg.Limits.Timeout = dur
 			}
 
 			// Parse root properties.
@@ -106,25 +223,31 @@ delivery-path traceability.`,
 		},
 	}
 
-	// CLI flags.
-	cmd.Flags().StringVarP(&cfg.OutputDir, "output-dir", "o", ".", "Target directory for SBOM and report output")
-	cmd.Flags().StringVar(&cfg.SBOMFormat, "format", "cyclonedx-json", "SBOM output format")
+	// Get defaults for proper flag initialization.
+	defaults := config.DefaultConfig()
+
+	// Configuration file flag.
+	cmd.Flags().StringVar(&configPath, "config", "", "Configuration file path (YAML format; auto-discovered if not set)")
+
+	// CLI flags (also bound to viper for env var / config file support).
+	cmd.Flags().StringVarP(&outputDir, "output-dir", "o", ".", "Target directory for SBOM and report output")
+	cmd.Flags().StringVar(&sbomFormat, "format", "cyclonedx-json", "SBOM output format")
 	cmd.Flags().StringVar(&policyStr, "policy", "strict", "Policy mode: strict (abort on limit) or partial (skip and continue)")
 	cmd.Flags().StringVar(&modeStr, "mode", "installer-semantic", "Interpretation mode: physical or installer-semantic")
 	cmd.Flags().StringVar(&reportStr, "report", "human", "Report output mode: human, machine, or both")
-	cmd.Flags().StringVar(&cfg.Language, "language", "en", "Report language: en or de")
-	cmd.Flags().StringVar(&cfg.RootMetadata.Manufacturer, "root-manufacturer", "", "Manufacturer/supplier for the SBOM root component")
-	cmd.Flags().StringVar(&cfg.RootMetadata.Name, "root-name", "", "Software/product name for the SBOM root component")
-	cmd.Flags().StringVar(&cfg.RootMetadata.Version, "root-version", "", "Version for the SBOM root component")
-	cmd.Flags().StringVar(&cfg.RootMetadata.DeliveryDate, "root-delivery-date", "", "Delivery date (YYYY-MM-DD) for the SBOM root component")
+	cmd.Flags().StringVar(&language, "language", "en", "Report language: en or de")
+	cmd.Flags().StringVar(&mfg, "root-manufacturer", "", "Manufacturer/supplier for the SBOM root component")
+	cmd.Flags().StringVar(&name, "root-name", "", "Software/product name for the SBOM root component")
+	cmd.Flags().StringVar(&version, "root-version", "", "Version for the SBOM root component")
+	cmd.Flags().StringVar(&delivDate, "root-delivery-date", "", "Delivery date (YYYY-MM-DD) for the SBOM root component")
 	cmd.Flags().StringArrayVar(&rootProps, "root-property", nil, "Additional root metadata as key=value (repeatable)")
-	cmd.Flags().BoolVar(&cfg.Unsafe, "unsafe", false, "Allow unsandboxed extraction (MUST never be silent)")
-	cmd.Flags().IntVar(&cfg.Limits.MaxDepth, "max-depth", cfg.Limits.MaxDepth, "Maximum extraction recursion depth")
-	cmd.Flags().IntVar(&cfg.Limits.MaxFiles, "max-files", cfg.Limits.MaxFiles, "Maximum total extracted file count")
-	cmd.Flags().Int64Var(&cfg.Limits.MaxTotalSize, "max-size", cfg.Limits.MaxTotalSize, "Maximum total uncompressed size in bytes")
-	cmd.Flags().Int64Var(&cfg.Limits.MaxEntrySize, "max-entry-size", cfg.Limits.MaxEntrySize, "Maximum single entry size in bytes")
-	cmd.Flags().IntVar(&cfg.Limits.MaxRatio, "max-ratio", cfg.Limits.MaxRatio, "Maximum compression ratio per entry")
-	cmd.Flags().DurationVar(&cfg.Limits.Timeout, "timeout", cfg.Limits.Timeout, "Per-extraction timeout")
+	cmd.Flags().BoolVar(&unsafe, "unsafe", false, "Allow unsandboxed extraction (MUST never be silent)")
+	cmd.Flags().IntVar(&maxDepth, "max-depth", defaults.Limits.MaxDepth, "Maximum extraction recursion depth")
+	cmd.Flags().IntVar(&maxFiles, "max-files", defaults.Limits.MaxFiles, "Maximum total extracted file count")
+	cmd.Flags().Int64Var(&maxSize, "max-size", defaults.Limits.MaxTotalSize, "Maximum total uncompressed size in bytes")
+	cmd.Flags().Int64Var(&maxEntry, "max-entry-size", defaults.Limits.MaxEntrySize, "Maximum single entry size in bytes")
+	cmd.Flags().IntVar(&maxRatio, "max-ratio", defaults.Limits.MaxRatio, "Maximum compression ratio per entry")
+	cmd.Flags().StringVar(&timeout, "timeout", "", "Per-extraction timeout")
 
 	return cmd
 }
