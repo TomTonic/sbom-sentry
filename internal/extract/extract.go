@@ -198,7 +198,7 @@ func extractRecursive(ctx context.Context, node *ExtractionNode, filePath string
 		err = extract7z(extractCtx, node, filePath, sb, cfg.WorkDir, cfg.Limits)
 	case identify.MSI:
 		// Read MSI metadata directly from the OLE structure (independent of 7zz).
-		if meta, msiErr := ReadMSIMetadata(filePath); msiErr == nil {
+		if meta, msiErr := ReadMSIMetadata(filePath, cfg.Limits.MaxEntrySize); msiErr == nil {
 			node.Metadata = meta
 		}
 		// In installer-semantic mode, flag that MSI File-table remapping

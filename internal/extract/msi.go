@@ -31,10 +31,11 @@ var msiPropertyNames = map[string]bool{
 //
 // Parameters:
 //   - path: filesystem path to the MSI file
+//   - maxStreamSize: maximum number of bytes to read from each metadata stream
 //
 // Returns a ContainerMetadata populated with available properties, or an error
 // if the file cannot be read or does not contain a valid MSI database.
-func ReadMSIMetadata(path string) (*ContainerMetadata, error) {
+func ReadMSIMetadata(path string, maxStreamSize int64) (*ContainerMetadata, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("msi: open %s: %w", path, err)
@@ -53,13 +54,13 @@ func ReadMSIMetadata(path string) (*ContainerMetadata, error) {
 	}
 
 	// Parse the string pool.
-	strings, err := parseMSIStringPool(stringPool, stringData)
+	strings, err := parseMSIStringPool(stringPool, stringData, maxStreamSize)
 	if err != nil {
 		return nil, fmt.Errorf("msi: parse string pool: %w", err)
 	}
 
 	// Parse the Property table.
-	props, err := parseMSIPropertyTable(propertyTable, strings)
+	props, err := parseMSIPropertyTable(propertyTable, strings, maxStreamSize)
 	if err != nil {
 		return nil, fmt.Errorf("msi: parse property table: %w", err)
 	}
@@ -167,13 +168,13 @@ func decodeMSIStreamName(name string) string {
 //
 // _StringPool format: pairs of (uint16 length, uint16 refcount) for each string.
 // _StringData format: concatenated UTF-8 string data, lengths from _StringPool.
-func parseMSIStringPool(poolReader, dataReader io.Reader) ([]string, error) {
-	poolData, err := io.ReadAll(poolReader)
+func parseMSIStringPool(poolReader, dataReader io.Reader, maxStreamSize int64) ([]string, error) {
+	poolData, err := readAllLimited(poolReader, maxStreamSize, "_StringPool")
 	if err != nil {
 		return nil, fmt.Errorf("read string pool: %w", err)
 	}
 
-	stringData, err := io.ReadAll(dataReader)
+	stringData, err := readAllLimited(dataReader, maxStreamSize, "_StringData")
 	if err != nil {
 		return nil, fmt.Errorf("read string data: %w", err)
 	}
@@ -214,8 +215,8 @@ func parseMSIStringPool(poolReader, dataReader io.Reader) ([]string, error) {
 // parseMSIPropertyTable reads the Property table stream and returns a map
 // of property name to value. The Property table has two columns, both
 // string references (indices into the string pool).
-func parseMSIPropertyTable(tableReader io.Reader, stringPool []string) (map[string]string, error) {
-	data, err := io.ReadAll(tableReader)
+func parseMSIPropertyTable(tableReader io.Reader, stringPool []string, maxStreamSize int64) (map[string]string, error) {
+	data, err := readAllLimited(tableReader, maxStreamSize, "Property")
 	if err != nil {
 		return nil, fmt.Errorf("read property table: %w", err)
 	}
@@ -271,4 +272,21 @@ func parseMSIPropertyTable(tableReader io.Reader, stringPool []string) (map[stri
 	}
 
 	return result, nil
+}
+
+func readAllLimited(reader io.Reader, maxBytes int64, streamName string) ([]byte, error) {
+	if maxBytes < 1 {
+		return nil, fmt.Errorf("invalid read limit %d for stream %s", maxBytes, streamName)
+	}
+
+	limited := io.LimitReader(reader, maxBytes+1)
+	data, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("stream %s exceeds limit of %d bytes", streamName, maxBytes)
+	}
+
+	return data, nil
 }

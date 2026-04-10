@@ -18,7 +18,7 @@ func TestReadMSIMetadataReturnsErrorForNonOLEFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	meta, err := ReadMSIMetadata(fakePath)
+	meta, err := ReadMSIMetadata(fakePath, 1024)
 	if err == nil {
 		t.Error("expected error for non-OLE file, got nil")
 	}
@@ -32,7 +32,7 @@ func TestReadMSIMetadataReturnsErrorForNonOLEFile(t *testing.T) {
 func TestReadMSIMetadataReturnsErrorForMissingFile(t *testing.T) {
 	t.Parallel()
 
-	_, err := ReadMSIMetadata("/nonexistent/file.msi")
+	_, err := ReadMSIMetadata("/nonexistent/file.msi", 1024)
 	if err == nil {
 		t.Error("expected error for missing file, got nil")
 	}
@@ -73,7 +73,7 @@ func TestParseMSIStringPoolEmptyInput(t *testing.T) {
 	poolData := bytes.NewReader([]byte{0x00, 0x00, 0x00, 0x00})
 	stringData := bytes.NewReader([]byte{})
 
-	result, err := parseMSIStringPool(poolData, stringData)
+	result, err := parseMSIStringPool(poolData, stringData, 1024)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -91,9 +91,33 @@ func TestParseMSIStringPoolTooSmall(t *testing.T) {
 	poolData := bytes.NewReader([]byte{0x00, 0x00})
 	stringData := bytes.NewReader([]byte{})
 
-	_, err := parseMSIStringPool(poolData, stringData)
+	_, err := parseMSIStringPool(poolData, stringData, 1024)
 	if err == nil {
 		t.Error("expected error for pool too small, got nil")
+	}
+}
+
+// TestParseMSIStringPoolRejectsOversizedStreams verifies that metadata parsing
+// enforces a hard byte limit per MSI stream to avoid unbounded memory use.
+func TestParseMSIStringPoolRejectsOversizedStreams(t *testing.T) {
+	t.Parallel()
+
+	poolData := bytes.NewReader([]byte{0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00})
+	stringData := bytes.NewReader([]byte("A"))
+
+	if _, err := parseMSIStringPool(poolData, stringData, 4); err == nil {
+		t.Fatal("expected oversized _StringPool stream to be rejected")
+	}
+}
+
+// TestParseMSIPropertyTableRejectsOversizedStream verifies that Property table
+// parsing is bounded by the configured stream limit.
+func TestParseMSIPropertyTableRejectsOversizedStream(t *testing.T) {
+	t.Parallel()
+
+	tableData := bytes.NewReader([]byte{0x01, 0x00, 0x02, 0x00})
+	if _, err := parseMSIPropertyTable(tableData, []string{"Name", "Value"}, 2); err == nil {
+		t.Fatal("expected oversized Property stream to be rejected")
 	}
 }
 
