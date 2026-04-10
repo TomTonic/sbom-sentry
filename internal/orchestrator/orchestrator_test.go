@@ -212,6 +212,46 @@ func TestRunWithHumanReportMode(t *testing.T) {
 	}
 }
 
+// TestRunSurvivingHumanReportIncludesLaterMachineFailure verifies that when
+// the human report is written successfully but the subsequent machine report
+// creation fails, the surviving human report is rewritten with that later
+// processing issue included.
+func TestRunSurvivingHumanReportIncludesLaterMachineFailure(t *testing.T) {
+	dir := t.TempDir()
+	inputPath := createMinimalZIP(t, dir, "delivery.zip")
+
+	blockedJSONPath := filepath.Join(dir, "delivery.report.json")
+	if err := os.MkdirAll(blockedJSONPath, 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config.DefaultConfig()
+	cfg.InputPath = inputPath
+	cfg.OutputDir = dir
+	cfg.Unsafe = true
+	cfg.ReportMode = config.ReportBoth
+
+	result := Run(context.Background(), cfg)
+
+	if result.ReportPath == "" {
+		t.Fatal("ReportPath is empty; expected surviving human report")
+	}
+	humanReport, err := os.ReadFile(result.ReportPath)
+	if err != nil {
+		t.Fatalf("cannot read human report: %v", err)
+	}
+	humanStr := string(humanReport)
+
+	for _, fragment := range []string{
+		"## Processing Errors",
+		"create-report-machine",
+	} {
+		if !strings.Contains(humanStr, fragment) {
+			t.Fatalf("human report missing %q", fragment)
+		}
+	}
+}
+
 // TestRunWithPathTraversalZIPStillWritesSBOMAndReport verifies the normative
 // finalization rule from DESIGN.md §6.3: after input validation succeeds and
 // root processing is initialized, a hard security event must not suppress

@@ -154,25 +154,30 @@ func Run(ctx context.Context, cfg config.Config) Result {
 
 	// Step 7: Generate report.
 	endTime := time.Now()
-	reportData := report.ReportData{
-		Input:            inputSummary,
-		Config:           cfg,
-		Tree:             tree,
-		Scans:            scans,
-		PolicyDecisions:  policyEngine.Decisions(),
-		SandboxInfo:      sandboxInfo,
-		ProcessingIssues: issues,
-		StartTime:        startTime,
-		EndTime:          endTime,
-		SBOMPath:         sbomPath,
+	buildReportData := func() report.ReportData {
+		processingIssues := append([]report.ProcessingIssue(nil), issues...)
+		return report.ReportData{
+			Input:            inputSummary,
+			Config:           cfg,
+			Tree:             tree,
+			Scans:            scans,
+			PolicyDecisions:  policyEngine.Decisions(),
+			SandboxInfo:      sandboxInfo,
+			ProcessingIssues: processingIssues,
+			StartTime:        startTime,
+			EndTime:          endTime,
+			SBOMPath:         sbomPath,
+		}
 	}
 
 	inputBase := strings.TrimSuffix(filepath.Base(cfg.InputPath), filepath.Ext(cfg.InputPath))
 	var reportPath string
+	var humanPath string
+	humanIssueCount := -1
 
 	switch cfg.ReportMode {
 	case config.ReportHuman, config.ReportBoth:
-		humanPath := filepath.Join(cfg.OutputDir, inputBase+".report.md")
+		humanPath = filepath.Join(cfg.OutputDir, inputBase+".report.md")
 		f, ferr := os.Create(humanPath)
 		if ferr != nil {
 			addIssue("create-report-human", ferr)
@@ -180,7 +185,7 @@ func Run(ctx context.Context, cfg config.Config) Result {
 				fatalErr = fmt.Errorf("create report: %w", ferr)
 			}
 		} else {
-			if werr := report.GenerateHuman(reportData, cfg.Language, f); werr != nil {
+			if werr := report.GenerateHuman(buildReportData(), cfg.Language, f); werr != nil {
 				_ = f.Close()
 				addIssue("write-report-human", werr)
 				if fatalErr == nil {
@@ -193,6 +198,7 @@ func Run(ctx context.Context, cfg config.Config) Result {
 				}
 			} else {
 				reportPath = humanPath
+				humanIssueCount = len(issues)
 			}
 		}
 	}
@@ -207,7 +213,7 @@ func Run(ctx context.Context, cfg config.Config) Result {
 				fatalErr = fmt.Errorf("create JSON report: %w", ferr)
 			}
 		} else {
-			if werr := report.GenerateMachine(reportData, f); werr != nil {
+			if werr := report.GenerateMachine(buildReportData(), f); werr != nil {
 				_ = f.Close()
 				addIssue("write-report-machine", werr)
 				if fatalErr == nil {
@@ -220,6 +226,29 @@ func Run(ctx context.Context, cfg config.Config) Result {
 				}
 			} else if reportPath == "" {
 				reportPath = jsonPath
+			}
+		}
+	}
+
+	if humanIssueCount >= 0 && len(issues) > humanIssueCount {
+		f, rewriteErr := os.Create(humanPath)
+		if rewriteErr != nil {
+			addIssue("rewrite-report-human", rewriteErr)
+			if fatalErr == nil {
+				fatalErr = fmt.Errorf("rewrite report: %w", rewriteErr)
+			}
+		} else {
+			if writeErr := report.GenerateHuman(buildReportData(), cfg.Language, f); writeErr != nil {
+				_ = f.Close()
+				addIssue("rewrite-report-human", writeErr)
+				if fatalErr == nil {
+					fatalErr = fmt.Errorf("rewrite report: %w", writeErr)
+				}
+			} else if closeErr := f.Close(); closeErr != nil {
+				addIssue("rewrite-report-human", closeErr)
+				if fatalErr == nil {
+					fatalErr = fmt.Errorf("rewrite report: %w", closeErr)
+				}
 			}
 		}
 	}
