@@ -20,17 +20,23 @@ limits, records extraction/scanning decisions, and keeps traceability via
 
 ## Quick Start
 
-Build:
+Install a prebuilt release binary (see [INSTALL.md](INSTALL.md)) or build
+from source (see [BUILD.md](BUILD.md)).
 
-```bash
-go build -o sbom-sentry ./cmd/sbom-sentry
-```
-
-Run (happy path, unsandboxed mode):
+Run (sandboxed mode on Linux with `bwrap`):
 
 ```bash
 mkdir -p out
-./sbom-sentry \
+sbom-sentry \
+  --output-dir out \
+  sample-delivery.zip
+```
+
+Run (unsandboxed, e.g., macOS or trusted CI):
+
+```bash
+mkdir -p out
+sbom-sentry \
   --unsafe \
   --output-dir out \
   sample-delivery.zip
@@ -44,6 +50,7 @@ Typical outputs in `out/` (base name derived from input file):
 ## Documentation
 
 - [INSTALL.md](INSTALL.md): installation and dependency troubleshooting
+- [BUILD.md](BUILD.md): building from source and release tooling
 - [USAGE.md](USAGE.md): scenario-based usage, parameters, and outputs
 - [DESIGN.md](DESIGN.md): functional and security design
 - [MODULE_GUIDE.md](MODULE_GUIDE.md): module architecture and decisions

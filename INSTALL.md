@@ -1,49 +1,77 @@
 # INSTALL
 
-This document explains how to install sbom-sentry, its dependencies, how to
-recognize missing dependencies, and how to install them in common environments.
+This document explains how to install a release build of sbom-sentry, install its
+runtime dependencies, recognize missing dependencies, and get them in common
+environments.
 
-## 1. Prerequisites
+For building from source or for development, see [BUILD.md](BUILD.md).
 
-Required:
+## 1. Download a Release Binary
 
-- Go `1.26.2` or newer (`go.mod`)
-- A writable output directory
-- A writable work directory (defaults to OS temp directory)
+Prebuilt binaries for Linux and macOS (amd64 and arm64) are available at:
 
-Runtime tool dependencies depend on your input formats and safety mode:
+```
+https://github.com/sbom-sentry/sbom-sentry/releases
+```
 
-- `7zz` (7-Zip): required for CAB, MSI payload extraction, 7z, RAR, and TAR XZ/Zstd extraction fallback
+Each release ships:
+
+- `sbom-sentry_<version>_<os>_<arch>.tar.gz` — binary archive
+- `checksums.txt` — SHA-256 checksums for all archives
+
+Example for Linux amd64:
+
+```bash
+VERSION=v1.0.0
+curl -Lo sbom-sentry.tar.gz \
+  "https://github.com/sbom-sentry/sbom-sentry/releases/download/${VERSION}/sbom-sentry_${VERSION}_linux_amd64.tar.gz"
+curl -Lo checksums.txt \
+  "https://github.com/sbom-sentry/sbom-sentry/releases/download/${VERSION}/checksums.txt"
+```
+
+## 2. Verify Checksum
+
+```bash
+sha256sum --check --ignore-missing checksums.txt
+```
+
+Expected output:
+
+```
+sbom-sentry.tar.gz: OK
+```
+
+Do not proceed if verification fails.
+
+## 3. Extract and Install
+
+```bash
+tar xzf sbom-sentry.tar.gz
+sudo mv sbom-sentry /usr/local/bin/sbom-sentry
+```
+
+Or place the binary anywhere on your `PATH`.
+
+## 4. Runtime Dependencies
+
+The binary itself has no external Go runtime dependencies. Certain input formats,
+however, require external tools at runtime:
+
+- `7zz` (7-Zip): required for CAB, 7z, MSI payload, RAR, and TAR XZ/Zstd extraction
 - `unshield`: required for InstallShield CAB extraction
 - `bwrap` (Bubblewrap, Linux only): required for sandboxed external extraction unless `--unsafe` is used
 
-Note: Syft is used as a Go library and is linked into the binary. You do not need a separate `syft` CLI installation.
+Syft is compiled into the binary. No separate Syft installation is needed.
 
-## 2. Build / Install
-
-### Option A: Build locally
-
-```bash
-go build -o sbom-sentry ./cmd/sbom-sentry
-```
-
-### Option B: Install via go install
-
-```bash
-go install ./cmd/sbom-sentry
-```
-
-This installs the binary into your Go bin path.
-
-## 3. Verify Installation
+## 5. Verify Installation
 
 Binary available:
 
 ```bash
-./sbom-sentry --version
+sbom-sentry --version
 ```
 
-Dependency checks (common quick test):
+Dependency checks:
 
 ```bash
 command -v 7zz || echo "7zz missing"
@@ -51,9 +79,9 @@ command -v unshield || echo "unshield missing"
 command -v bwrap || echo "bwrap missing (Linux sandbox mode)"
 ```
 
-## 4. How Missing Dependencies Show Up
+## 6. How Missing Dependencies Show Up
 
-### 4.1 Missing output or work directory permissions
+### 6.1 Missing output or work directory permissions
 
 Symptoms:
 
@@ -64,7 +92,7 @@ Fix:
 - create directory and set permissions
 - pass explicit `--output-dir` / `--work-dir`
 
-### 4.2 Missing 7zz
+### 6.2 Missing 7zz
 
 When input requires 7-Zip-backed extraction (e.g., CAB, 7z, MSI, RAR):
 
@@ -72,14 +100,14 @@ When input requires 7-Zip-backed extraction (e.g., CAB, 7z, MSI, RAR):
 - status detail mentions `7zz (7-Zip) is not installed`
 - run may become partial (exit code 1) depending on policy/results
 
-### 4.3 Missing unshield
+### 6.3 Missing unshield
 
 When processing InstallShield CAB:
 
 - extraction node status becomes `tool-missing`
 - status detail mentions `unshield is not installed`
 
-### 4.4 Missing bwrap (sandbox)
+### 6.4 Missing bwrap (sandbox)
 
 If `bwrap` is unavailable and you did not pass `--unsafe`:
 
@@ -88,9 +116,9 @@ If `bwrap` is unavailable and you did not pass `--unsafe`:
 
 If you pass `--unsafe`, sbom-sentry will run external tools unsandboxed and prints a warning on startup.
 
-## 5. Getting Dependencies (Typical)
+## 7. Getting Dependencies (Typical)
 
-### 5.1 macOS (Homebrew)
+### 7.1 macOS (Homebrew)
 
 ```bash
 brew install p7zip unshield
@@ -100,14 +128,14 @@ Sandbox note:
 
 - `bwrap` is Linux-focused; on macOS use `--unsafe` in trusted environments when external tools are needed.
 
-### 5.2 Ubuntu / Debian
+### 7.2 Ubuntu / Debian
 
 ```bash
 sudo apt-get update
 sudo apt-get install -y p7zip-full unshield bubblewrap
 ```
 
-### 5.3 Fedora / RHEL-like
+### 7.3 Fedora / RHEL-like
 
 ```bash
 sudo dnf install -y p7zip p7zip-plugins unshield bubblewrap
@@ -115,7 +143,7 @@ sudo dnf install -y p7zip p7zip-plugins unshield bubblewrap
 
 Package names can vary by distribution version. If a package is not found, search for the equivalent `7zip`, `unshield`, or `bubblewrap` package.
 
-## 6. Minimal Post-Install Smoke Test
+## 8. Minimal Post-Install Smoke Test
 
 ```bash
 mkdir -p out
