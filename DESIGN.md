@@ -151,19 +151,31 @@ This graph:
 - Does not require any visual (DOT/graphical) representation
 
 ### 5.3 Delivery Path Traceability
-Every component in the SBOM must carry a reference to its location within the
-original delivery structure. The path is expressed relative to the delivery root
-and includes all nesting levels, e.g.:
+Every component in the SBOM must carry at least one provenance reference into
+the original delivery structure.
+
+The primary reference is the exact physical artifact path, expressed relative to
+the delivery root and including all nesting levels, e.g.:
 
     sw_delivery.zip/server/webserver.tar.gz/java/component.jar
 
-This property:
-- Enables downstream consumers to trace any SBOM component back to its
-  physical location in the original delivery
-- Is stored as a CycloneDX component property
-  (`sbom-sentry:delivery-path`)
-- Applies to both container components and leaf components discovered by Syft
-- Is deterministic and stable for a given input
+This physical artifact reference is stored as a CycloneDX component property
+(`sbom-sentry:delivery-path`). It is the main pointer used to show a supplier
+the exact defective or vulnerable artifact within the delivered package.
+
+If a component is derived from richer evidence than a single physical artifact
+(for example a package inferred from a manifest inside a JAR), the SBOM may
+add one or more optional provenance references such as
+`sbom-sentry:evidence-path` for the specific internal files or archive members
+that support the identification.
+
+This model ensures:
+- Every component has a stable, defensible pointer back into the original delivery
+- File and container components point to the exact physical artifact in question
+- Logically derived packages can retain additional evidence without pretending
+  they always map 1:1 to a single file
+- The audit log can preserve the exact blocked or suspicious archive member path
+  for dispute resolution
 
 ### 5.4 Container Metadata Enrichment
 Container formats that carry structured metadata about their contents must be
@@ -183,6 +195,11 @@ potentially a generic PURL. Without this metadata, the MSI component would
 appear in the SBOM as an opaque file with only a hash — invisible to
 vulnerability scanners.
 
+For MSI, metadata extraction is a direct read of the MSI database and must not
+depend on whether payload extraction via 7-Zip is available. Even if the MSI's
+internal files cannot be unpacked, the MSI component itself shall still be
+represented in the SBOM with the best available product metadata.
+
 This principle extends to any future container format that provides
 structured product metadata.
 
@@ -191,6 +208,9 @@ If extraction fails or is restricted:
 - The container component remains in the SBOM
 - The SBOM and report must clearly indicate the limitation
 - Downstream consumers must be able to assess resulting coverage gaps
+- Hard-security-blocked subtrees remain represented as incomplete or
+  security-blocked parts of the final SBOM whenever the overall run can still
+  complete and write outputs
 
 ---
 
@@ -219,9 +239,13 @@ The extraction logic must robustly prevent:
 ### 6.3 Hard Security Events
 Hard security violations — path traversal, symlink escape, special file
 materialization — are **never** overridable, regardless of any CLI flag or
-configuration. They abort the affected extraction subtree immediately and
-prevent SBOM generation for that subtree. The audit report must always
-document them.
+configuration. They abort the affected extraction subtree immediately.
+
+If the overall orchestration can still continue, sbom-sentry shall still write
+the final SBOM and audit report. The affected subtree is then represented as
+incomplete or security-blocked, and the process exits with a non-success status.
+The audit report must always document the exact offending path or archive member
+that caused the block.
 
 ### 6.4 Explicit Unsafe Override Mode
 If the preferred technical isolation mechanism is unavailable, the operator may explicitly opt into
@@ -283,6 +307,9 @@ All relevant code must be written in **Go**.
 - **Syft** is mandatory, preferably used in library mode
 - External extraction tools are optional at runtime; if missing, the corresponding
   formats are recorded as non-extractable in the SBOM rather than causing a fatal error
+- Direct metadata reads from supported container formats (for example MSI
+  product metadata) should remain available even when payload extraction tools
+  are missing
 
 ---
 
@@ -315,9 +342,12 @@ At minimum:
 - Configuration and limits
 - Interpretation mode and policy mode
 - Full recursive extraction log with delivery paths
+- Exact offending archive-member or file paths for blocked security events
 - Tools and isolation used
 - SBOM modeling assumptions
 - Container metadata extracted (e.g. MSI properties) and how it was used
+- Optional evidence paths where component identification relied on internal
+  files rather than a single physical artifact
 - Whether unsafe override mode was active
 - Unidentified binaries and other coverage gaps
 - Summary of completeness and limitations
@@ -333,7 +363,13 @@ sbom-sentry is complete when:
 - CAB and MSI contents are extractable and auditable
 - Containers always appear as SBOM components
 - Every SBOM component carries a delivery-path reference to its origin
+- Optional evidence paths are retained where they materially strengthen
+  traceability
 - Container metadata (e.g. MSI properties) is extracted and used for CPE enrichment
+- MSI container metadata remains available even when payload extraction is not
+  possible
+- Hard security findings still produce a final SBOM and report whenever overall
+  orchestration can continue, with affected subtrees marked incomplete
 - Limits and policies are enforced and documented
 - Native Linux execution is fully supported
 - Results are reproducible and defensible
