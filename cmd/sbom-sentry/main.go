@@ -16,6 +16,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -82,129 +83,9 @@ Configuration can be set via:
 		Version: scriptVersion,
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Initialize viper with config file support.
-			viper.SetConfigName(".sbom-sentry")
-			viper.SetConfigType("yaml")
-
-			// Search paths: current dir, home dir.
-			viper.AddConfigPath(".")
-			if home, err := os.UserHomeDir(); err == nil {
-				viper.AddConfigPath(home)
-			}
-
-			// Allow explicit config file via flag.
-			if configPath != "" {
-				viper.SetConfigFile(configPath)
-			}
-
-			// Try to read config file (ignore if not found).
-			_ = viper.ReadInConfig()
-
-			// Bind all flags to viper for env var and config file support.
-			viper.SetEnvPrefix("SBOM_SENTRY")
-			viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
-			viper.AutomaticEnv()
-			var bindErr error
-			cmd.Flags().VisitAll(func(f *pflag.Flag) {
-				if bindErr != nil {
-					return
-				}
-				if err := viper.BindPFlag(f.Name, f); err != nil {
-					bindErr = fmt.Errorf("bind flag %s to viper: %w", f.Name, err)
-				}
-			})
-			if bindErr != nil {
-				return bindErr
-			}
-
-			// Build config from viper (merges flags, env, config file, defaults).
-			cfg := config.DefaultConfig()
-			cfg.InputPath = args[0]
-
-			// Parse string enums.
-			if policyStr != "" {
-				mode, err := config.ParsePolicyMode(policyStr)
-				if err != nil {
-					return err
-				}
-				cfg.PolicyMode = mode
-			}
-
-			if modeStr != "" {
-				mode, err := config.ParseInterpretMode(modeStr)
-				if err != nil {
-					return err
-				}
-				cfg.InterpretMode = mode
-			}
-
-			if reportStr != "" {
-				mode, err := config.ParseReportMode(reportStr)
-				if err != nil {
-					return err
-				}
-				cfg.ReportMode = mode
-			}
-
-			// Copy scalar values.
-			if outputDir != "" {
-				cfg.OutputDir = outputDir
-			}
-			if workDir != "" {
-				cfg.WorkDir = workDir
-			}
-			if sbomFormat != "" {
-				cfg.SBOMFormat = sbomFormat
-			}
-			if language != "" {
-				cfg.Language = language
-			}
-			if mfg != "" {
-				cfg.RootMetadata.Manufacturer = mfg
-			}
-			if name != "" {
-				cfg.RootMetadata.Name = name
-			}
-			if scriptVersion != "" {
-				cfg.RootMetadata.Version = scriptVersion
-			}
-			if delivDate != "" {
-				cfg.RootMetadata.DeliveryDate = delivDate
-			}
-			cfg.Unsafe = unsafe
-			if maxDepth > 0 {
-				cfg.Limits.MaxDepth = maxDepth
-			}
-			if maxFiles > 0 {
-				cfg.Limits.MaxFiles = maxFiles
-			}
-			if maxSize > 0 {
-				cfg.Limits.MaxTotalSize = maxSize
-			}
-			if maxEntry > 0 {
-				cfg.Limits.MaxEntrySize = maxEntry
-			}
-			if maxRatio > 0 {
-				cfg.Limits.MaxRatio = maxRatio
-			}
-			if timeout != "" {
-				dur, err := time.ParseDuration(timeout)
-				if err != nil {
-					return fmt.Errorf("invalid timeout: %v", err)
-				}
-				cfg.Limits.Timeout = dur
-			}
-
-			// Parse root properties.
-			for _, prop := range rootProps {
-				k, v, ok := parseKeyValue(prop)
-				if !ok {
-					return fmt.Errorf("invalid --root-property format: %q (expected key=value)", prop)
-				}
-				if cfg.RootMetadata.Properties == nil {
-					cfg.RootMetadata.Properties = make(map[string]string)
-				}
-				cfg.RootMetadata.Properties[k] = v
+			cfg, err := loadConfig(cmd, args)
+			if err != nil {
+				return err
 			}
 
 			// Print unsafe warning.
@@ -264,6 +145,104 @@ Configuration can be set via:
 	cmd.Flags().StringVar(&timeout, "timeout", "", "Per-extraction timeout")
 
 	return cmd
+}
+
+func loadConfig(cmd *cobra.Command, args []string) (config.Config, error) {
+	v := viper.New()
+	v.SetConfigName(".sbom-sentry")
+	v.AddConfigPath(".")
+	if home, err := os.UserHomeDir(); err == nil {
+		v.AddConfigPath(home)
+	}
+
+	configPath, err := cmd.Flags().GetString("config")
+	if err != nil {
+		return config.Config{}, fmt.Errorf("read config flag: %w", err)
+	}
+	if configPath != "" {
+		v.SetConfigFile(configPath)
+	}
+
+	v.SetEnvPrefix("SBOM_SENTRY")
+	v.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
+	v.AutomaticEnv()
+
+	var bindErr error
+	cmd.Flags().VisitAll(func(f *pflag.Flag) {
+		if bindErr != nil {
+			return
+		}
+		if bindFlagErr := v.BindPFlag(f.Name, f); bindFlagErr != nil {
+			bindErr = fmt.Errorf("bind flag %s to viper: %w", f.Name, bindFlagErr)
+		}
+	})
+	if bindErr != nil {
+		return config.Config{}, bindErr
+	}
+
+	if readErr := v.ReadInConfig(); readErr != nil {
+		var notFound viper.ConfigFileNotFoundError
+		if configPath != "" || !errors.As(readErr, &notFound) {
+			return config.Config{}, fmt.Errorf("read config: %w", readErr)
+		}
+	}
+
+	cfg := config.DefaultConfig()
+	cfg.InputPath = args[0]
+	cfg.OutputDir = v.GetString("output-dir")
+	cfg.WorkDir = v.GetString("work-dir")
+	cfg.SBOMFormat = v.GetString("format")
+	cfg.Language = v.GetString("language")
+	cfg.RootMetadata.Manufacturer = v.GetString("root-manufacturer")
+	cfg.RootMetadata.Name = v.GetString("root-name")
+	cfg.RootMetadata.Version = v.GetString("root-version")
+	cfg.RootMetadata.DeliveryDate = v.GetString("root-delivery-date")
+	cfg.Unsafe = v.GetBool("unsafe")
+	cfg.Limits.MaxDepth = v.GetInt("max-depth")
+	cfg.Limits.MaxFiles = v.GetInt("max-files")
+	cfg.Limits.MaxTotalSize = v.GetInt64("max-size")
+	cfg.Limits.MaxEntrySize = v.GetInt64("max-entry-size")
+	cfg.Limits.MaxRatio = v.GetInt("max-ratio")
+
+	policyMode, err := config.ParsePolicyMode(v.GetString("policy"))
+	if err != nil {
+		return config.Config{}, err
+	}
+	cfg.PolicyMode = policyMode
+
+	interpretMode, err := config.ParseInterpretMode(v.GetString("mode"))
+	if err != nil {
+		return config.Config{}, err
+	}
+	cfg.InterpretMode = interpretMode
+
+	reportMode, err := config.ParseReportMode(v.GetString("report"))
+	if err != nil {
+		return config.Config{}, err
+	}
+	cfg.ReportMode = reportMode
+
+	timeoutValue := v.GetString("timeout")
+	if timeoutValue != "" {
+		dur, err := time.ParseDuration(timeoutValue)
+		if err != nil {
+			return config.Config{}, fmt.Errorf("invalid timeout: %v", err)
+		}
+		cfg.Limits.Timeout = dur
+	}
+
+	for _, prop := range v.GetStringSlice("root-property") {
+		k, value, ok := parseKeyValue(prop)
+		if !ok {
+			return config.Config{}, fmt.Errorf("invalid --root-property format: %q (expected key=value)", prop)
+		}
+		if cfg.RootMetadata.Properties == nil {
+			cfg.RootMetadata.Properties = make(map[string]string)
+		}
+		cfg.RootMetadata.Properties[k] = value
+	}
+
+	return cfg, nil
 }
 
 // parseKeyValue splits "key=value" into its parts.
