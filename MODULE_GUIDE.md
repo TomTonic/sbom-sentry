@@ -48,7 +48,7 @@ Additional Go compression modules (only if the corresponding TAR variant must be
 | Mechanism | Available | Not Available |
 |---|---|---|
 | `bwrap` | All external binary invocations (`7zz`, `unshield`) are sandboxed | User must pass `--unsafe` flag; extraction runs unsandboxed. Prominently flagged in report. |
-| `7zz` | Microsoft CAB/MSI extraction proceeds normally. Also handles 7z/RAR inputs. | Microsoft CAB/MSI/7z/RAR archives are recorded as non-extractable components in the SBOM. Audit report notes missing tool. |
+| `7zz` | Microsoft CAB/MSI extraction proceeds normally. Also handles 7z/RAR inputs. | Microsoft CAB/7z/RAR archives are recorded as non-extractable components in the SBOM. MSI payload extraction is skipped, but MSI container metadata is still read directly from the MSI database and added to the SBOM. Audit report notes missing tool. |
 | `unshield` | InstallShield CAB extraction proceeds normally. | InstallShield CABs are recorded as non-extractable components in the SBOM. Audit report notes missing tool. |
 | Syft (library) | Required | Fatal error. |
 
@@ -168,8 +168,10 @@ This functionality is deferred to the installer-semantic implementation phase
 remapping.
 
 **MSI metadata extraction (both modes).** Independently of filename remapping,
-the MSI Property table is read in *both* physical and installer-semantic modes
-to extract product metadata for SBOM enrichment:
+the MSI Property table is read directly from the original MSI in *both*
+physical and installer-semantic modes to extract product metadata for SBOM
+enrichment. This step does not depend on 7-Zip and still runs when payload
+extraction is unavailable:
 
 | MSI Property | Usage |
 |---|---|
@@ -419,7 +421,7 @@ sbom-sentry only extracts when Syft cannot see through a container format.
 // ExtractionNode is the central processing data structure.
 // Each node represents a container artifact encountered during traversal.
 type ExtractionNode struct {
-    Path          string         // original path relative to delivery root
+  Path          string         // physical artifact path relative to delivery root
     Format        identify.FormatInfo
     Status        ExtractionStatus // SyftNative, Extracted, Skipped, Failed, SecurityBlocked
     StatusDetail  string
@@ -453,18 +455,22 @@ func Extract(ctx context.Context, inputPath string, cfg config.Config, sandbox s
 ```
 For each file encountered:
   1. Identify format (identify.Identify)
-  2. If SyftNative == true:
+  2. If file is MSI:
+    → read Property table directly via mscfb
+    → populate node.Metadata even if later payload extraction is unavailable
+  3. If SyftNative == true:
      → mark as SyftNative leaf (Tool = "syft")
      → scan module will invoke Syft directly on the original file
      → do NOT extract
-  3. If SyftNative == false AND file is a recognized container format:
+  4. If SyftNative == false AND file is a recognized container format:
      → extract:
         ├─ ZIP                 → Go stdlib archive/zip (in-process, per-entry safeguard)
         ├─ TAR / compressed TAR → Go stdlib archive/tar + compress/* (in-process, per-entry safeguard)
-        ├─ CAB, MSI, 7z, RAR   → 7zz via sandbox (post-extraction safeguard walk)        ├─ InstallShield CAB    → unshield via sandbox (post-extraction safeguard walk)        └─ Unknown container   → mark as non-extractable leaf
+      ├─ CAB, MSI, 7z, RAR   → 7zz via sandbox (post-extraction safeguard walk)
+      ├─ InstallShield CAB   → unshield via sandbox (post-extraction safeguard walk)
+      └─ Unknown container   → mark as non-extractable leaf
      → for each extracted child: recurse (depth + 1)
-     → for MSI: additionally read Property table via mscfb → populate node.Metadata
-  4. If not a container format:
+  5. If not a container format:
      → mark as plain leaf (will be picked up by Syft when its parent directory is scanned)
 ```
 
@@ -472,7 +478,7 @@ For each file encountered:
 - ZIP → extracted with `archive/zip`
 - DLL → plain leaf, cataloged when Syft scans the extracted directory
 - JAR → SyftNative (Syft's Java cataloger handles it directly)
-- MSI → extracted with 7zz via sandbox → MSI Property table read (Manufacturer, ProductName, ProductVersion) → produces internal CABs → recurse
+- MSI → Property table read directly from the original file → extracted with 7zz via sandbox when available → produces internal CABs → recurse
 
 **Design decisions:**
 - **Go stdlib extraction** (`archive/zip`, `archive/tar`) runs in-process.
@@ -483,9 +489,15 @@ For each file encountered:
 - **7-Zip extraction** is always mediated by the sandbox interface.
   After 7-Zip completes, `safeguard` walks the output directory to validate
   all resulting paths and file types.
+- **MSI metadata extraction** is independent of 7-Zip. If payload extraction
+  is unavailable, the MSI node still remains in the tree with enriched
+  metadata and a non-extractable or partial status.
 - Depth, file count, total size, and per-entry limits from `config.Limits`
   are enforced continuously. Violations trigger policy behavior:
   `strict` → abort entire run, `partial` → skip subtree, continue.
+- Hard security violations block the affected subtree immediately, but the
+  orchestrator still writes a final SBOM and report whenever the processing
+  state is sufficiently complete to do so.
 - Every node logs tool, sandbox, timing, and outcome for the audit trail.
 - Temporary extraction directories use `os.MkdirTemp` under a
   configurable work directory and are cleaned up after processing.
@@ -554,8 +566,10 @@ func Assemble(tree *extract.ExtractionNode, scans []scan.ScanResult, cfg config.
 ```
 
 **Assembly rules:**
-1. Create a top-level `Component` (type `Application`) for the input file itself.
-2. For every `ExtractionNode`:
+1. Create a single top-level `Component` (type `Application`) for the input file itself.
+   This component also represents the root `ExtractionNode`; the root is not
+   emitted again as a second `File` component.
+2. For every non-root `ExtractionNode`:
    - Create a `Component` (type `File`) representing the container artifact.
    - Set `BOMRef` to a deterministic identifier derived from the node path.
    - Attach any hashes (SHA-256 at minimum) computed during extraction.
@@ -569,8 +583,11 @@ func Assemble(tree *extract.ExtractionNode, scans []scan.ScanResult, cfg config.
 3. For every `ScanResult`:
    - Merge its `BOM.Components` into the unified component list.
    - Prefix each `BOMRef` with the node path to avoid collisions.
-   - Set `sbom-sentry:delivery-path` on each merged component, computed as
-     the node path + the component's relative location within the scan target.
+   - Set `sbom-sentry:delivery-path` on each merged component to the nearest
+     defensible physical artifact path in the original delivery, usually the
+     scanned node path itself.
+   - Add optional repeated `sbom-sentry:evidence-path` properties when exact
+     internal files or archive members used for identification are known.
 4. Build `Dependencies`:
    - Each container component `dependsOn` its child container components
      and the packages discovered inside it.
@@ -583,6 +600,9 @@ func Assemble(tree *extract.ExtractionNode, scans []scan.ScanResult, cfg config.
 
 **Design decisions:**
 - BOMRef namespacing by node path guarantees uniqueness across merged BOMs.
+- `sbom-sentry:delivery-path` is the exact supplier-facing pointer to the
+  physical artifact in the delivery; `sbom-sentry:evidence-path` is optional
+  supporting provenance for components derived from richer internal evidence.
 - Composition completeness annotations enable downstream consumers to
   programmatically assess coverage without reading the audit report.
 - The dependency graph models containment/origin (per DESIGN.md §5.2),
@@ -618,10 +638,15 @@ func GenerateMachine(data ReportData, w io.Writer) error
 - Input identification (filename, size, SHA-256, SHA-512)
 - Configuration snapshot (limits, policy, mode, language)
 - Interpretation mode and policy mode
-- Full recursive extraction log (tree-structured)
+- Full recursive extraction log with delivery paths
+- Exact offending archive-member or file paths for blocked security events
 - Tools and isolation used per extraction step
 - SBOM modeling assumptions
+- Container metadata extracted (e.g. MSI properties) and how it was used
+- Optional evidence paths where component identification relied on internal
+  files rather than a single physical artifact
 - Whether unsafe override was active
+- Unidentified binaries and other coverage gaps
 - Summary of completeness and limitations
 - Explicit residual risk statement
 
@@ -661,7 +686,8 @@ func (e *Engine) Decisions() []Decision
 - In `partial` mode, the offending subtree is `Skip`-ped; processing
   continues elsewhere.
 - Hard security failures (`safeguard.HardSecurityError`) always produce
-  `Abort` regardless of policy mode.
+  an abort of the affected subtree and elevate the final process status,
+  regardless of policy mode.
 - All decisions are collected for the audit report.
 
 ---
@@ -686,7 +712,7 @@ func Run(ctx context.Context, cfg config.Config) error
 7. Write SBOM to output file
 8. report.Generate*(reportData, cfg, outputWriter)
 9. Clean up temporary directories
-10. Return exit code (0 = success, 1 = partial/incomplete, 2 = hard failure)
+10. Return exit code (0 = success, 1 = partial/incomplete, 2 = hard security incident or fatal runtime failure)
 ```
 
 **Design decisions:**
@@ -694,6 +720,10 @@ func Run(ctx context.Context, cfg config.Config) error
 - Exit codes are deterministic and machine-parseable.
 - Errors at any stage are captured in `ReportData` before the report
   is generated, so all failures are always documented.
+- If a hard security event occurs after processing has already produced a
+  usable extraction tree, the orchestrator still writes a final SBOM and
+  audit report, marks the affected subtree incomplete or security-blocked,
+  and returns exit code `2`.
 
 ---
 
@@ -767,6 +797,10 @@ Two distinct categories, enforced at different layers:
 
 The `--unsafe` flag affects only the sandbox requirement, never the
 hard security checks.
+
+Hard security events therefore change the final status code and subtree
+completeness, but do not suppress final output generation when the run has
+already accumulated enough state to produce a defensible SBOM and report.
 
 ### 5.4 External Binaries: 7-Zip and unshield
 
@@ -886,6 +920,10 @@ This enrichment is critical because without it, the MSI component would
 only appear as an opaque file with a SHA-256 hash — completely invisible
 to vulnerability scanners like Grype.
 
+Because the Property table is read directly from the original MSI, this
+enrichment remains available even if 7-Zip is missing or MSI payload
+extraction is otherwise skipped.
+
 The same approach can be extended to other metadata-bearing container
 formats in the future (e.g. InstallShield data files, NSIS installers)
 if suitable parsers become available.
@@ -893,8 +931,8 @@ if suitable parsers become available.
 ### 5.9 Delivery Path Traceability in SBOM
 
 Every component in the consolidated SBOM carries a
-`sbom-sentry:delivery-path` property recording its full location within
-the original delivery, e.g.:
+`sbom-sentry:delivery-path` property recording the nearest defensible
+physical artifact path within the original delivery, e.g.:
 
 ```
 sw_delivery.zip/server/webserver.tar.gz/java/component.jar
@@ -902,8 +940,12 @@ sw_delivery.zip/server/webserver.tar.gz/java/component.jar
 
 This applies to:
 - **Container components** created by sbom-sentry (path = `ExtractionNode.Path`)
-- **Package components** discovered by Syft (path = node path + relative
-  file location within the scan target)
+- **Package components** discovered by Syft (path = the physical delivery
+  artifact from which the package was observed, typically the scanned node path)
+
+If more precise internal provenance is available, sbom-sentry additionally
+stores one or more `sbom-sentry:evidence-path` properties for the exact
+manifest, archive member, or internal file that supported the identification.
 
 The property uses forward-slash separators regardless of host OS and is
 always relative to the delivery root (the input file name). It enables
@@ -956,7 +998,8 @@ delivery without re-extracting it.
 2. `sandbox`: Bubblewrap implementation + passthrough fallback
 3. `extract`: 7-Zip invocation via sandbox for CAB/MSI; post-extraction safeguard walk
 4. MSI metadata extraction: OLE reader (`mscfb`) + MSI string-pool parser to read
-   Property table → populate `ContainerMetadata` → CPE generation in assembly
+  Property table directly from the original MSI → populate `ContainerMetadata`
+  → CPE generation in assembly, independent of 7-Zip availability
 5. `--unsafe` flag and associated warning logic
 6. Delivery-path property (`sbom-sentry:delivery-path`) on all SBOM components
 7. Integration tests with CAB and MSI test fixtures
@@ -1010,4 +1053,4 @@ Examples:
 |---|---|
 | 0 | Success: SBOM and report produced, all subtrees fully processed |
 | 1 | Partial: some subtrees skipped or incomplete (partial policy) |
-| 2 | Hard failure: security violation, missing required tool, or configuration error |
+| 2 | Hard security incident or fatal runtime failure; if processing state exists, SBOM and report are still written with affected subtrees marked incomplete |
