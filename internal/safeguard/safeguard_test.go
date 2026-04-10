@@ -5,6 +5,7 @@
 package safeguard
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -224,6 +225,62 @@ func TestValidateEntryRejectsExcessiveTotalSize(t *testing.T) {
 	}
 	if _, ok := err.(*ResourceLimitError); !ok {
 		t.Errorf("expected ResourceLimitError, got %T", err)
+	}
+}
+
+// TestValidateEntryRejectsOverflowingFileCount verifies that max-files checks
+// cannot be bypassed by integer overflow in the next-count calculation.
+func TestValidateEntryRejectsOverflowingFileCount(t *testing.T) {
+	t.Parallel()
+
+	limits := config.DefaultLimits()
+	limits.MaxFiles = math.MaxInt
+
+	stats := &ExtractionStats{FileCount: math.MaxInt}
+	header := EntryHeader{
+		Name:             "one-more.txt",
+		UncompressedSize: 1,
+		Mode:             0o644,
+	}
+
+	err := ValidateEntry(header, limits, stats)
+	if err == nil {
+		t.Fatal("expected error for overflowing file count")
+	}
+	limitErr, ok := err.(*ResourceLimitError)
+	if !ok {
+		t.Fatalf("expected ResourceLimitError, got %T", err)
+	}
+	if limitErr.Limit != "max-files" {
+		t.Fatalf("Limit = %q, want %q", limitErr.Limit, "max-files")
+	}
+}
+
+// TestValidateEntryRejectsOverflowingTotalSize verifies that max-total-size
+// checks are overflow-safe for near-int64-max cumulative sizes.
+func TestValidateEntryRejectsOverflowingTotalSize(t *testing.T) {
+	t.Parallel()
+
+	limits := config.DefaultLimits()
+	limits.MaxTotalSize = math.MaxInt64
+
+	stats := &ExtractionStats{TotalSize: math.MaxInt64}
+	header := EntryHeader{
+		Name:             "one-more.bin",
+		UncompressedSize: 1,
+		Mode:             0o644,
+	}
+
+	err := ValidateEntry(header, limits, stats)
+	if err == nil {
+		t.Fatal("expected error for overflowing total size")
+	}
+	limitErr, ok := err.(*ResourceLimitError)
+	if !ok {
+		t.Fatalf("expected ResourceLimitError, got %T", err)
+	}
+	if limitErr.Limit != "max-total-size" {
+		t.Fatalf("Limit = %q, want %q", limitErr.Limit, "max-total-size")
 	}
 }
 

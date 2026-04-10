@@ -9,6 +9,7 @@ package safeguard
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -192,20 +193,21 @@ func ValidateEntry(header EntryHeader, limits config.Limits, stats *ExtractionSt
 	}
 
 	// Resource limit: total file count.
-	if stats.FileCount+1 > limits.MaxFiles {
+	if stats.FileCount >= limits.MaxFiles {
 		return &ResourceLimitError{
 			Limit:   "max-files",
-			Current: int64(stats.FileCount + 1),
+			Current: int64(stats.FileCount) + 1,
 			Max:     int64(limits.MaxFiles),
 			Path:    header.Name,
 		}
 	}
 
 	// Resource limit: total uncompressed size.
-	if stats.TotalSize+header.UncompressedSize > limits.MaxTotalSize {
+	if header.UncompressedSize > limits.MaxTotalSize-stats.TotalSize {
+		current := saturatingAddInt64(stats.TotalSize, header.UncompressedSize)
 		return &ResourceLimitError{
 			Limit:   "max-total-size",
-			Current: stats.TotalSize + header.UncompressedSize,
+			Current: current,
 			Max:     limits.MaxTotalSize,
 			Path:    header.Name,
 		}
@@ -216,6 +218,16 @@ func ValidateEntry(header EntryHeader, limits config.Limits, stats *ExtractionSt
 	stats.TotalSize += header.UncompressedSize
 
 	return nil
+}
+
+func saturatingAddInt64(a int64, b int64) int64 {
+	if b > 0 && a > math.MaxInt64-b {
+		return math.MaxInt64
+	}
+	if b < 0 && a < math.MinInt64-b {
+		return math.MinInt64
+	}
+	return a + b
 }
 
 // ValidatePostExtraction walks an extraction output directory and validates
