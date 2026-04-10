@@ -186,7 +186,12 @@ func Run(ctx context.Context, cfg config.Config) Result {
 			}
 		} else {
 			if werr := report.GenerateHuman(buildReportData(), cfg.Language, f); werr != nil {
-				_ = f.Close()
+				if cerr := f.Close(); cerr != nil {
+					addIssue("close-report-human", cerr)
+					if fatalErr == nil {
+						fatalErr = fmt.Errorf("close report: %w", cerr)
+					}
+				}
 				addIssue("write-report-human", werr)
 				if fatalErr == nil {
 					fatalErr = fmt.Errorf("write report: %w", werr)
@@ -214,7 +219,12 @@ func Run(ctx context.Context, cfg config.Config) Result {
 			}
 		} else {
 			if werr := report.GenerateMachine(buildReportData(), f); werr != nil {
-				_ = f.Close()
+				if cerr := f.Close(); cerr != nil {
+					addIssue("close-report-machine", cerr)
+					if fatalErr == nil {
+						fatalErr = fmt.Errorf("close JSON report: %w", cerr)
+					}
+				}
 				addIssue("write-report-machine", werr)
 				if fatalErr == nil {
 					fatalErr = fmt.Errorf("write JSON report: %w", werr)
@@ -239,7 +249,12 @@ func Run(ctx context.Context, cfg config.Config) Result {
 			}
 		} else {
 			if writeErr := report.GenerateHuman(buildReportData(), cfg.Language, f); writeErr != nil {
-				_ = f.Close()
+				if closeErr := f.Close(); closeErr != nil {
+					addIssue("rewrite-report-human", closeErr)
+					if fatalErr == nil {
+						fatalErr = fmt.Errorf("rewrite report: %w", closeErr)
+					}
+				}
 				addIssue("rewrite-report-human", writeErr)
 				if fatalErr == nil {
 					fatalErr = fmt.Errorf("rewrite report: %w", writeErr)
