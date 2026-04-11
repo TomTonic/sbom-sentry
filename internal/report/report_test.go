@@ -70,7 +70,7 @@ func TestGenerateHumanIncludesGeneratorBuildInfo(t *testing.T) {
 	}
 
 	output := buf.String()
-	if !strings.Contains(output, "| Generator | v1.2.3 rev 0123456789ab 2026-04-11T12:34:56Z dirty |") {
+	if !strings.Contains(output, "| extract-sbom build | v1.2.3 rev 0123456789ab 2026-04-11T12:34:56Z dirty |") {
 		t.Fatal("report does not contain generator build info")
 	}
 }

@@ -56,6 +56,13 @@ func Read() Info {
 		}
 	}
 
+	// Release binaries are built in CI with an explicit release version injected
+	// via ldflags. For those artifacts, reporting "dirty" is confusing for
+	// operators and does not add actionable value in audit reports.
+	if strings.TrimSpace(ReleaseVersion) != "" {
+		bi.Modified = false
+	}
+
 	return bi
 }
 
