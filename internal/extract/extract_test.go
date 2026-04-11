@@ -206,14 +206,14 @@ func TestExtractZIPInvalidUTF8EntryNameIsSanitized(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := fw.Write([]byte("content")); err != nil {
-		t.Fatal(err)
+	if _, writeErr := fw.Write([]byte("content")); writeErr != nil {
+		t.Fatal(writeErr)
 	}
-	if err := w.Close(); err != nil {
-		t.Fatal(err)
+	if closeErr := w.Close(); closeErr != nil {
+		t.Fatal(closeErr)
 	}
-	if err := f.Close(); err != nil {
-		t.Fatal(err)
+	if closeErr := f.Close(); closeErr != nil {
+		t.Fatal(closeErr)
 	}
 
 	cfg := config.DefaultConfig()
