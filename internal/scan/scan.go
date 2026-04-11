@@ -24,6 +24,9 @@ import (
 	"github.com/anchore/syft/syft"
 	"github.com/anchore/syft/syft/format/cyclonedxjson"
 
+	// Register a pure-Go SQLite driver required by Syft's RPM catalogers.
+	_ "github.com/glebarez/go-sqlite"
+
 	"github.com/TomTonic/extract-sbom/internal/config"
 	"github.com/TomTonic/extract-sbom/internal/extract"
 )
@@ -83,7 +86,7 @@ func ScanAll(ctx context.Context, root *extract.ExtractionNode, cfg config.Confi
 
 		duration := time.Since(start).Round(time.Millisecond)
 		if results[i].Error != nil {
-			cfg.EmitProgress(config.ProgressNormal, "[scan %d/%d] failed after %s: %s", i+1, len(results), duration, results[i].NodePath)
+			cfg.EmitProgress(config.ProgressNormal, "[scan %d/%d] failed after %s: %s (%v)", i+1, len(results), duration, results[i].NodePath, results[i].Error)
 			continue
 		}
 
