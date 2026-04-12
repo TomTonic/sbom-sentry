@@ -272,11 +272,20 @@ func identifyFromHeader(header []byte, ext string, baseName string) FormatInfo {
 		return info
 	}
 
-	// InstallShield by naming convention: data*.cab + data*.hdr
+	// InstallShield by naming convention: data*.cab
 	if isInstallShieldByName(baseName) {
 		info.Format = InstallShieldCAB
 		info.MIMEType = "application/x-installshield-cab"
 		info.Extractable = true
+		return info
+	}
+
+	// Syft-native formats that are not ZIP-based (RPM, DEB, APK, etc.).
+	// These have their own magic bytes that none of the checks above matched,
+	// but Syft handles them natively as standalone package files.
+	if syftNativeExtensions[ext] {
+		info.SyftNative = true
+		info.Extractable = false
 		return info
 	}
 
@@ -295,7 +304,8 @@ func isTarExtension(baseName string) bool {
 }
 
 // isInstallShieldByName detects InstallShield CABs by naming convention.
+// Only .cab files are extractable containers; .hdr files are companion
+// header files that are not themselves containers.
 func isInstallShieldByName(baseName string) bool {
-	return strings.HasPrefix(baseName, "data") &&
-		(strings.HasSuffix(baseName, ".cab") || strings.HasSuffix(baseName, ".hdr"))
+	return strings.HasPrefix(baseName, "data") && strings.HasSuffix(baseName, ".cab")
 }

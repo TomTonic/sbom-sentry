@@ -262,6 +262,31 @@ func TestIdentifyDetectsInstallShieldCABByMagic(t *testing.T) {
 	}
 }
 
+// TestIdentifyTreatsInstallShieldHdrAsUnknown verifies that InstallShield
+// header files (data*.hdr) are not misidentified as extractable containers.
+// The .hdr file is a companion to the .cab file and cannot be extracted
+// independently.
+func TestIdentifyTreatsInstallShieldHdrAsUnknown(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	content := make([]byte, 300)
+	copy(content, []byte("HDR header content"))
+
+	path := createTestFile(t, dir, "data1.hdr", content)
+
+	info, err := Identify(context.Background(), path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if info.Format != Unknown {
+		t.Errorf("Format = %v, want Unknown for .hdr companion file", info.Format)
+	}
+	if info.Extractable {
+		t.Error("Extractable = true, want false for .hdr companion file")
+	}
+}
+
 // TestIdentifyReturnsUnknownForUnrecognizedFormat verifies that files
 // with no recognizable magic bytes are reported as Unknown rather than
 // causing an error. Unknown files are treated as plain leaves.
@@ -280,6 +305,50 @@ func TestIdentifyReturnsUnknownForUnrecognizedFormat(t *testing.T) {
 	}
 	if info.Format != Unknown {
 		t.Errorf("Format = %v, want Unknown", info.Format)
+	}
+}
+
+// TestIdentifySyftNativeByExtensionForNonZIPFormats verifies that files
+// with syft-native extensions (RPM, DEB, APK) are correctly identified
+// even though their magic bytes don't match any archive format check.
+// These formats are handled directly by Syft and should not be extracted.
+func TestIdentifySyftNativeByExtensionForNonZIPFormats(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		magic   []byte
+		wantExt bool
+	}{
+		{"server.rpm", []byte{0xED, 0xAB, 0xEE, 0xDB}, true}, // RPM magic
+		{"libssl.deb", []byte("!<arch>\n"), true},            // DEB/ar magic
+		{"alpine.apk", []byte{0x1F, 0x8B, 0x08}, true},       // APK is gzip
+		{"readme.txt", []byte("plain text content"), false},  // not syft-native
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+
+			content := make([]byte, 300)
+			copy(content, tt.magic)
+			path := createTestFile(t, dir, tt.name, content)
+
+			info, err := Identify(context.Background(), path)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if tt.wantExt && !info.SyftNative {
+				t.Errorf("%s: SyftNative = false, want true", tt.name)
+			}
+			if tt.wantExt && info.Extractable {
+				t.Errorf("%s: Extractable = true, want false for syft-native", tt.name)
+			}
+			if !tt.wantExt && info.SyftNative {
+				t.Errorf("%s: SyftNative = true, want false", tt.name)
+			}
+		})
 	}
 }
 
