@@ -737,6 +737,12 @@ func isToolAvailable(tool string) bool {
 	return err == nil
 }
 
+// IsToolAvailable is the exported version of isToolAvailable for use by
+// other packages (e.g. orchestrator) for early tool availability checks.
+func IsToolAvailable(tool string) bool {
+	return isToolAvailable(tool)
+}
+
 // lookPath is a variable to enable testing.
 var lookPath = execLookPath
 
