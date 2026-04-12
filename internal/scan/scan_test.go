@@ -269,10 +269,11 @@ func TestCollectEvidencePathsFromExtractedDirPEBinary(t *testing.T) {
 	}
 }
 
-// TestCollectEvidencePathsFromExtractedDirSkipsJARs verifies that JAR files
-// found in an extracted directory do NOT get location-based evidence, since
-// they are handled separately via the SyftNative + MANIFEST.MF path.
-func TestCollectEvidencePathsFromExtractedDirSkipsJARs(t *testing.T) {
+// TestCollectEvidencePathsFromExtractedDirIncludesJARs verifies that JAR files
+// found in an extracted directory get the JAR path as evidence. Global
+// cross-node dedup (in the assembly module) later selects between the
+// extracted-dir entry and the SyftNative entry based on evidence richness.
+func TestCollectEvidencePathsFromExtractedDirIncludesJARs(t *testing.T) {
 	t.Parallel()
 
 	node := &extract.ExtractionNode{
@@ -294,8 +295,39 @@ func TestCollectEvidencePathsFromExtractedDirSkipsJARs(t *testing.T) {
 	}}
 
 	evidence := collectEvidencePaths(node, "/tmp/extracted-zip-abc", bom)
+	want := []string{"delivery.zip/lib/gis/gt-xsd-wfs-28.0.jar"}
+	if got := evidence["syft-jar"]; !reflect.DeepEqual(got, want) {
+		t.Errorf("JAR evidence = %v, want %v", got, want)
+	}
+}
+
+// TestCollectEvidencePathsSkipsSelfReferencing verifies that when
+// syft:location:0:path resolves to the node path itself (self-reference),
+// no evidence is recorded — evidence equal to delivery path is meaningless.
+func TestCollectEvidencePathsSkipsSelfReferencing(t *testing.T) {
+	t.Parallel()
+
+	node := &extract.ExtractionNode{
+		Path:   "delivery.zip/app-1.0.zip",
+		Status: extract.StatusExtracted,
+		Format: identify.FormatInfo{Format: identify.ZIP},
+	}
+
+	bom := &cdx.BOM{Components: &[]cdx.Component{
+		{
+			BOMRef:  "self-ref",
+			Name:    "app",
+			Version: "1.0",
+			Properties: &[]cdx.Property{
+				// Location pointing to root of extraction = the node itself
+				{Name: "syft:location:0:path", Value: "/"},
+			},
+		},
+	}}
+
+	evidence := collectEvidencePaths(node, "/tmp/extracted-xyz", bom)
 	if evidence != nil {
-		t.Errorf("expected nil evidence for JAR in extracted dir, got %v", evidence)
+		t.Errorf("expected nil evidence for self-referencing location, got %v", evidence)
 	}
 }
 

@@ -541,11 +541,9 @@ func collectEvidencePaths(node *extract.ExtractionNode, target string, bom *cdx.
 	}
 
 	// Extracted-directory path: for each component, derive per-component
-	// evidence from syft:location:0:path. For binary formats (PE, dotnet)
-	// the source file itself is the evidence — the cataloger reads version
-	// metadata directly from the binary. JAR-type files are excluded here
-	// because their evidence (MANIFEST.MF) is handled via the SyftNative
-	// path when the child node is scanned directly.
+	// evidence from syft:location:0:path. The source file is the evidence —
+	// whether it is a binary (PE, dotnet) whose version resource was read,
+	// or a JAR whose MANIFEST.MF / pom.properties was inspected by Syft.
 	if node.Status == extract.StatusExtracted {
 		evidence := make(map[string][]string)
 		for i := range *bom.Components {
@@ -557,10 +555,11 @@ func collectEvidencePaths(node *extract.ExtractionNode, target string, bom *cdx.
 			if loc == "" {
 				continue
 			}
-			if isManifestEvidenceCandidate(loc) {
-				continue // handled by SyftNative child scan
-			}
 			evidencePath := path.Clean(node.Path + "/" + strings.TrimPrefix(loc, "/"))
+			// Skip self-referencing evidence where evidence = delivery path.
+			if evidencePath == node.Path {
+				continue
+			}
 			evidence[comp.BOMRef] = []string{evidencePath}
 		}
 		if len(evidence) == 0 {

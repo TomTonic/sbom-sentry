@@ -1210,3 +1210,153 @@ func TestAssembleKeepsDistinctStrongDuplicates(t *testing.T) {
 		t.Fatalf("expected both strong components to remain (foundA=%t, foundB=%t)", foundA, foundB)
 	}
 }
+
+// TestAssembleDeduplicatesCrossNodeComponents verifies that when the same PURL
+// appears in scan results from two different nodes (e.g. an extracted parent
+// directory and a SyftNative child JAR), only one component survives in the
+// final BOM. The surviving entry should be the one with richer evidence.
+func TestAssembleDeduplicatesCrossNodeComponents(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	inputPath := filepath.Join(dir, "delivery.zip")
+	if err := os.WriteFile(inputPath, []byte("PK fake"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	jarPath := filepath.Join(dir, "jrt-fs.jar")
+	if err := os.WriteFile(jarPath, []byte("PK jar"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config.DefaultConfig()
+	cfg.InputPath = inputPath
+	cfg.OutputDir = dir
+
+	const (
+		jarDeliveryPath = "delivery.zip/jre/lib/jrt-fs.jar"
+		purl            = "pkg:maven/jrt-fs/jrt-fs@11.0.30"
+		manifestPath    = "delivery.zip/jre/lib/jrt-fs.jar/META-INF/MANIFEST.MF"
+	)
+
+	tree := &extract.ExtractionNode{
+		Path:         "delivery.zip",
+		OriginalPath: inputPath,
+		Status:       extract.StatusExtracted,
+		Format:       identify.FormatInfo{Format: identify.ZIP},
+		Children: []*extract.ExtractionNode{{
+			Path:         jarDeliveryPath,
+			OriginalPath: jarPath,
+			Status:       extract.StatusSyftNative,
+			Format:       identify.FormatInfo{Format: identify.ZIP, SyftNative: true},
+		}},
+	}
+
+	// Simulate two scan results for the same JAR from different nodes:
+	// 1. Extracted-directory scan finds it (no evidence from jar itself)
+	// 2. SyftNative scan with MANIFEST.MF evidence
+	scans := []scan.ScanResult{
+		{
+			NodePath: "delivery.zip",
+			BOM: &cdx.BOM{Components: &[]cdx.Component{
+				{
+					BOMRef:     "from-extracted",
+					Type:       cdx.ComponentTypeLibrary,
+					Name:       "jrt-fs",
+					Version:    "11.0.30",
+					PackageURL: purl,
+					Properties: &[]cdx.Property{
+						{Name: "syft:location:0:path", Value: "/jre/lib/jrt-fs.jar"},
+						{Name: "syft:package:foundBy", Value: "java-archive-cataloger"},
+					},
+				},
+			}},
+			EvidencePaths: map[string][]string{
+				"from-extracted": {jarDeliveryPath},
+			},
+		},
+		{
+			NodePath: jarDeliveryPath,
+			BOM: &cdx.BOM{Components: &[]cdx.Component{
+				{
+					BOMRef:     "from-native",
+					Type:       cdx.ComponentTypeLibrary,
+					Name:       "jrt-fs",
+					Version:    "11.0.30",
+					PackageURL: purl,
+					Properties: &[]cdx.Property{
+						{Name: "syft:package:foundBy", Value: "java-archive-cataloger"},
+					},
+				},
+			}},
+			EvidencePaths: map[string][]string{
+				"from-native": {manifestPath},
+			},
+		},
+	}
+
+	bom, suppressions, err := Assemble(tree, scans, cfg)
+	if err != nil {
+		t.Fatalf("Assemble error: %v", err)
+	}
+	if bom.Components == nil {
+		t.Fatal("Components is nil")
+	}
+
+	// Count components with the jrt-fs PURL.
+	var purlMatches []cdx.Component
+	for _, comp := range *bom.Components {
+		if comp.PackageURL == purl {
+			purlMatches = append(purlMatches, comp)
+		}
+	}
+	if len(purlMatches) != 1 {
+		t.Fatalf("expected exactly 1 jrt-fs component, got %d", len(purlMatches))
+	}
+
+	// The surviving entry should have evidence.
+	comp := purlMatches[0]
+	if comp.Properties == nil {
+		t.Fatal("surviving component has no properties")
+	}
+	var hasEvidence bool
+	for _, p := range *comp.Properties {
+		if p.Name == "extract-sbom:evidence-path" && p.Value != "" {
+			hasEvidence = true
+		}
+	}
+	if !hasEvidence {
+		t.Error("surviving component should have evidence-path")
+	}
+
+	// Exactly one weak-duplicate suppression for the jrt-fs PURL.
+	weakCount := 0
+	for _, s := range suppressions {
+		if s.Reason == SuppressionWeakDuplicate && s.Component.PackageURL == purl {
+			weakCount++
+		}
+	}
+	if weakCount != 1 {
+		t.Errorf("expected 1 cross-node SuppressionWeakDuplicate for %s, got %d", purl, weakCount)
+	}
+
+	// Verify no dangling BOMRefs in the dependency graph.
+	if bom.Dependencies != nil {
+		componentRefs := make(map[string]bool)
+		if bom.Metadata != nil && bom.Metadata.Component != nil {
+			componentRefs[bom.Metadata.Component.BOMRef] = true
+		}
+		for _, comp := range *bom.Components {
+			componentRefs[comp.BOMRef] = true
+		}
+		for _, dep := range *bom.Dependencies {
+			if dep.Dependencies == nil {
+				continue
+			}
+			for _, childRef := range *dep.Dependencies {
+				if !componentRefs[childRef] {
+					t.Errorf("dangling dependency ref %q in dep %q", childRef, dep.Ref)
+				}
+			}
+		}
+	}
+}

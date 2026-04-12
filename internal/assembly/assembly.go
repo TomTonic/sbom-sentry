@@ -237,7 +237,14 @@ func normalizeScanComponents(node *extract.ExtractionNode, sr *scan.ScanResult) 
 			}
 		}
 
-		evidence := append([]string(nil), sr.EvidencePaths[comp.BOMRef]...)
+		rawEvidence := sr.EvidencePaths[comp.BOMRef]
+		evidence := make([]string, 0, len(rawEvidence))
+		for _, ep := range rawEvidence {
+			// Skip evidence that equals the delivery path — it adds no information.
+			if ep != deliveryPath {
+				evidence = append(evidence, ep)
+			}
+		}
 		sort.Strings(evidence)
 
 		candidates = append(candidates, scanComponentCandidate{
@@ -544,6 +551,176 @@ func firstComponentPropertyValue(comp cdx.Component, name string) string {
 	return ""
 }
 
+// deduplicateGlobalComponents performs cross-node deduplication on the final
+// assembled component list. Components from different scan nodes can describe
+// the same physical file when both an extracted-directory scan and a
+// SyftNative scan cover the same JAR. This function groups components by
+// (PURL, delivery-path) and keeps only the richest entry, rewriting
+// dependency graph references so no dangling BOMRefs remain.
+func deduplicateGlobalComponents(components []cdx.Component, dependencies []cdx.Dependency) ([]cdx.Component, []SuppressionRecord) {
+	type globalKey struct {
+		purl         string
+		deliveryPath string
+	}
+
+	// Index: globalKey → list of component indices.
+	groups := make(map[globalKey][]int)
+	var keyOrder []globalKey
+	for i := range components {
+		comp := components[i]
+		purl := comp.PackageURL
+		if purl == "" {
+			continue // only dedup components with PURL
+		}
+		// Container-as-module nodes (type=file) are structural; skip them.
+		if comp.Type == cdx.ComponentTypeFile {
+			continue
+		}
+		dp := componentPropertyValue(comp, "extract-sbom:delivery-path")
+		if dp == "" {
+			continue
+		}
+		k := globalKey{purl, dp}
+		if _, exists := groups[k]; !exists {
+			keyOrder = append(keyOrder, k)
+		}
+		groups[k] = append(groups[k], i)
+	}
+
+	// For each group with >1 entries, pick the best and suppress the rest.
+	suppress := make(map[int]struct{})
+	// refRewrite maps suppressed BOMRef → surviving BOMRef for dependency fixup.
+	refRewrite := make(map[string]string)
+	var suppressions []SuppressionRecord
+
+	for _, k := range keyOrder {
+		idxs := groups[k]
+		if len(idxs) < 2 {
+			continue
+		}
+
+		// Pick the entry with the most evidence; break ties by quality/order.
+		bestIdx := idxs[0]
+		for _, idx := range idxs[1:] {
+			if globalComponentBetter(components[idx], components[bestIdx]) {
+				bestIdx = idx
+			}
+		}
+
+		best := components[bestIdx]
+		for _, idx := range idxs {
+			if idx == bestIdx {
+				continue
+			}
+			suppress[idx] = struct{}{}
+			refRewrite[components[idx].BOMRef] = best.BOMRef
+			suppressions = append(suppressions, SuppressionRecord{
+				Reason:       SuppressionWeakDuplicate,
+				Component:    components[idx],
+				FoundBy:      firstComponentPropertyValue(components[idx], "syft:package:foundBy"),
+				DeliveryPath: k.deliveryPath,
+				KeptName:     best.Name,
+				KeptFoundBy:  firstComponentPropertyValue(best, "syft:package:foundBy"),
+			})
+		}
+	}
+
+	if len(suppress) == 0 {
+		return components, nil
+	}
+
+	// Build filtered component list.
+	filtered := make([]cdx.Component, 0, len(components)-len(suppress))
+	for i := range components {
+		if _, ok := suppress[i]; !ok {
+			filtered = append(filtered, components[i])
+		}
+	}
+
+	// Rewrite dependency references so no dangling refs remain.
+	for i := range dependencies {
+		if newRef, ok := refRewrite[dependencies[i].Ref]; ok {
+			dependencies[i].Ref = newRef
+		}
+		if dependencies[i].Dependencies != nil {
+			rewritten := make([]string, 0, len(*dependencies[i].Dependencies))
+			seen := make(map[string]struct{})
+			for _, ref := range *dependencies[i].Dependencies {
+				if newRef, ok := refRewrite[ref]; ok {
+					ref = newRef
+				}
+				if _, dup := seen[ref]; !dup {
+					seen[ref] = struct{}{}
+					rewritten = append(rewritten, ref)
+				}
+			}
+			*dependencies[i].Dependencies = rewritten
+		}
+	}
+
+	return filtered, suppressions
+}
+
+// globalComponentBetter returns true if a is a better representative than b
+// for a global PURL+deliveryPath group. Prefers more evidence, then higher
+// quality score, then earlier BOMRef for determinism.
+func globalComponentBetter(a, b cdx.Component) bool {
+	aEvidence := countPropertyValues(a, "extract-sbom:evidence-path")
+	bEvidence := countPropertyValues(b, "extract-sbom:evidence-path")
+	if aEvidence != bEvidence {
+		return aEvidence > bEvidence
+	}
+	aScore := globalQualityScore(a)
+	bScore := globalQualityScore(b)
+	if aScore != bScore {
+		return aScore > bScore
+	}
+	return a.BOMRef < b.BOMRef
+}
+
+func globalQualityScore(comp cdx.Component) int {
+	score := 0
+	if comp.PackageURL != "" {
+		score += 4
+	}
+	foundBy := firstComponentPropertyValue(comp, "syft:package:foundBy")
+	if foundBy != "" {
+		score += 3
+	}
+	if comp.Version != "" {
+		score += 2
+	}
+	if comp.Name != "" {
+		score++
+	}
+	return score
+}
+
+func componentPropertyValue(comp cdx.Component, name string) string {
+	if comp.Properties == nil {
+		return ""
+	}
+	for _, prop := range *comp.Properties {
+		if prop.Name == name {
+			return prop.Value
+		}
+	}
+	return ""
+}
+
+func countPropertyValues(comp cdx.Component, name string) int {
+	if comp.Properties == nil {
+		return 0
+	}
+	count := 0
+	for _, prop := range *comp.Properties {
+		if prop.Name == name && prop.Value != "" {
+			count++
+		}
+	}
+	return count
+}
+
 // Assemble builds the final, unified CycloneDX BOM from the extraction tree
 // and per-node scan results. It creates container-as-module components,
 // merges discovered packages, builds the dependency graph, and annotates
@@ -667,6 +844,14 @@ func Assemble(tree *extract.ExtractionNode, scans []scan.ScanResult, cfg config.
 	processNode(tree, &components, &dependencies, &rootDep, &compositions, scanMap, refAssigner, true, &suppressions)
 
 	dependencies = append(dependencies, rootDep)
+
+	// Global cross-node deduplication: components from different scan nodes
+	// can describe the same physical file (same PURL + same delivery path).
+	// For example, a JAR found by scanning an extracted directory AND by a
+	// direct SyftNative scan of the same JAR. Per-node dedup cannot catch
+	// these; they must be deduplicated after all nodes have been processed.
+	components, globalSuppressions := deduplicateGlobalComponents(components, dependencies)
+	suppressions = append(suppressions, globalSuppressions...)
 
 	// Sort components by BOMRef for determinism.
 	sort.Slice(components, func(i, j int) bool {
