@@ -263,7 +263,8 @@ func reuseSyftNativeResultsFromExtractedScans(root *extract.ExtractionNode, resu
 
 		assignedPackagesByNode := make(map[string][]syftpkg.Package)
 		remainingPackages := make([]syftpkg.Package, 0, len(results[idx].syftPackages))
-		for _, pkg := range results[idx].syftPackages {
+		for i := range results[idx].syftPackages {
+			pkg := results[idx].syftPackages[i]
 			ownerPath := matchPackageToSyftNativeNode(pkg, descendantNativeNodes)
 			if ownerPath == "" {
 				remainingPackages = append(remainingPackages, pkg)

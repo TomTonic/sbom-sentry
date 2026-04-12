@@ -45,9 +45,10 @@ func testdataZIP(t *testing.T) string {
 	return abs
 }
 
-// requireTool skips the test if a required tool is not on PATH.
-func requireTool(t *testing.T, name string) {
+// requireTool skips the test if 7zz is not on PATH.
+func requireTool(t *testing.T) {
 	t.Helper()
+	const name = "7zz"
 	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
 		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
 			return
@@ -123,7 +124,7 @@ func TestVendorSuitePhase1ExtractionTree(t *testing.T) {
 	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
 		t.Skip("test requires unix")
 	}
-	requireTool(t, "7zz")
+	requireTool(t)
 	inputPath := testdataZIP(t)
 
 	cfg := config.DefaultConfig()
@@ -302,7 +303,7 @@ func TestVendorSuitePhase2ScanAndAttribution(t *testing.T) {
 	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
 		t.Skip("test requires unix")
 	}
-	requireTool(t, "7zz")
+	requireTool(t)
 	inputPath := testdataZIP(t)
 
 	cfg := config.DefaultConfig()
@@ -442,7 +443,7 @@ func TestVendorSuiteSBOMAssembly(t *testing.T) {
 	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
 		t.Skip("test requires unix")
 	}
-	requireTool(t, "7zz")
+	requireTool(t)
 	inputPath := testdataZIP(t)
 
 	cfg := config.DefaultConfig()
@@ -581,7 +582,7 @@ func TestVendorSuiteDeterminism(t *testing.T) {
 	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
 		t.Skip("test requires unix")
 	}
-	requireTool(t, "7zz")
+	requireTool(t)
 	inputPath := testdataZIP(t)
 
 	runPipeline := func() []byte {
@@ -601,8 +602,8 @@ func TestVendorSuiteDeterminism(t *testing.T) {
 			t.Fatalf("assembly failed: %v", err)
 		}
 		out := filepath.Join(cfg.OutputDir, "test.cdx.json")
-		if err := assembly.WriteSBOM(bom, out); err != nil {
-			t.Fatalf("write SBOM: %v", err)
+		if writeErr := assembly.WriteSBOM(bom, out); writeErr != nil {
+			t.Fatalf("write SBOM: %v", writeErr)
 		}
 		data, err := os.ReadFile(out)
 		if err != nil {
@@ -645,18 +646,19 @@ func TestVendorSuiteDeterminism(t *testing.T) {
 			minLen = len(s2)
 		}
 		for i := 0; i < minLen; i++ {
-			if s1[i] != s2[i] {
-				start := i - 80
-				if start < 0 {
-					start = 0
-				}
-				end := i + 80
-				if end > minLen {
-					end = minLen
-				}
-				t.Errorf("first diff at byte %d:\n  run1: ...%s...\n  run2: ...%s...", i, s1[start:end], s2[start:end])
-				break
+			if s1[i] == s2[i] {
+				continue
 			}
+			start := i - 80
+			if start < 0 {
+				start = 0
+			}
+			end := i + 80
+			if end > minLen {
+				end = minLen
+			}
+			t.Errorf("first diff at byte %d:\n  run1: ...%s...\n  run2: ...%s...", i, s1[start:end], s2[start:end])
+			break
 		}
 		t.Error("SBOM output is not deterministic across two runs")
 	}

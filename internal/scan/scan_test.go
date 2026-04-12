@@ -334,7 +334,7 @@ func TestReuseSyftNativeResultsFromExtractedScansMovesPackagesToNativeNode(t *te
 
 	extractedDir := t.TempDir()
 	jarDir := filepath.Join(extractedDir, "lib")
-	if err := os.MkdirAll(jarDir, 0o755); err != nil {
+	if err := os.MkdirAll(jarDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	jarPath := filepath.Join(jarDir, "app.jar")
@@ -440,7 +440,8 @@ func componentNames(bom *cdx.BOM) []string {
 	}
 
 	names := make([]string, 0, len(*bom.Components))
-	for _, component := range *bom.Components {
+	for i := range *bom.Components {
+		component := (*bom.Components)[i]
 		names = append(names, component.Name)
 	}
 	sort.Strings(names)
