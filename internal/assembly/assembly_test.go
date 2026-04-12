@@ -946,3 +946,154 @@ func TestAssembleRefinesDeliveryPathFromSyftLocation(t *testing.T) {
 	}
 	t.Error("spring-web component not found in BOM")
 }
+
+// TestAssembleMergesWeakDuplicatePlaceholders verifies that the assembled SBOM
+// keeps a rich package record and drops weak placeholder duplicates for the
+// same delivery/evidence location.
+func TestAssembleMergesWeakDuplicatePlaceholders(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	inputPath := filepath.Join(dir, "delivery.zip")
+	if err := os.WriteFile(inputPath, []byte("PK fake"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config.DefaultConfig()
+	cfg.InputPath = inputPath
+	cfg.OutputDir = dir
+
+	tree := &extract.ExtractionNode{
+		Path:         "delivery.zip",
+		OriginalPath: inputPath,
+		Status:       extract.StatusExtracted,
+		Format:       identify.FormatInfo{Format: identify.ZIP},
+	}
+
+	scans := []scan.ScanResult{{
+		NodePath: "delivery.zip",
+		BOM: &cdx.BOM{Components: &[]cdx.Component{
+			{
+				BOMRef:     "good",
+				Type:       cdx.ComponentTypeLibrary,
+				Name:       "janino",
+				Version:    "3.1.10",
+				PackageURL: "pkg:maven/org.codehaus.janino/janino@3.1.10",
+				Properties: &[]cdx.Property{
+					{Name: "syft:location:0:path", Value: "/plugins/launcher-ext/janino-3.1.10.jar"},
+					{Name: "syft:package:foundBy", Value: "java-archive-cataloger"},
+				},
+			},
+			{
+				BOMRef: "weak",
+				Type:   cdx.ComponentTypeLibrary,
+				Name:   "janino-3.1.10.jar",
+				Properties: &[]cdx.Property{
+					{Name: "syft:location:0:path", Value: "/plugins/launcher-ext/janino-3.1.10.jar"},
+				},
+			},
+		}},
+		EvidencePaths: map[string][]string{
+			"good": {"delivery.zip/plugins/launcher-ext/janino-3.1.10.jar/META-INF/MANIFEST.MF"},
+			"weak": {"delivery.zip/plugins/launcher-ext/janino-3.1.10.jar/META-INF/MANIFEST.MF"},
+		},
+	}}
+
+	bom, err := Assemble(tree, scans, cfg)
+	if err != nil {
+		t.Fatalf("Assemble error: %v", err)
+	}
+	if bom.Components == nil {
+		t.Fatal("Components is nil")
+	}
+
+	goodCount := 0
+	weakCount := 0
+	for _, comp := range *bom.Components {
+		if comp.Name == "janino" && comp.Version == "3.1.10" && comp.PackageURL != "" {
+			goodCount++
+		}
+		if comp.Name == "janino-3.1.10.jar" {
+			weakCount++
+		}
+	}
+
+	if goodCount != 1 {
+		t.Fatalf("good janino component count = %d, want 1", goodCount)
+	}
+	if weakCount != 0 {
+		t.Fatalf("weak placeholder count = %d, want 0", weakCount)
+	}
+}
+
+// TestAssembleKeepsDistinctStrongDuplicates verifies that if multiple strong
+// package records exist at the same location, assembly does not collapse them.
+func TestAssembleKeepsDistinctStrongDuplicates(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	inputPath := filepath.Join(dir, "delivery.zip")
+	if err := os.WriteFile(inputPath, []byte("PK fake"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config.DefaultConfig()
+	cfg.InputPath = inputPath
+	cfg.OutputDir = dir
+
+	tree := &extract.ExtractionNode{
+		Path:         "delivery.zip",
+		OriginalPath: inputPath,
+		Status:       extract.StatusExtracted,
+		Format:       identify.FormatInfo{Format: identify.ZIP},
+	}
+
+	scans := []scan.ScanResult{{
+		NodePath: "delivery.zip",
+		BOM: &cdx.BOM{Components: &[]cdx.Component{
+			{
+				BOMRef:     "a",
+				Type:       cdx.ComponentTypeLibrary,
+				Name:       "pkg-a",
+				Version:    "1.0.0",
+				PackageURL: "pkg:maven/acme/pkg-a@1.0.0",
+				Properties: &[]cdx.Property{{Name: "syft:location:0:path", Value: "/plugins/shared.jar"}, {Name: "syft:package:foundBy", Value: "java-archive-cataloger"}},
+			},
+			{
+				BOMRef:     "b",
+				Type:       cdx.ComponentTypeLibrary,
+				Name:       "pkg-b",
+				Version:    "2.0.0",
+				PackageURL: "pkg:maven/acme/pkg-b@2.0.0",
+				Properties: &[]cdx.Property{{Name: "syft:location:0:path", Value: "/plugins/shared.jar"}, {Name: "syft:package:foundBy", Value: "java-archive-cataloger"}},
+			},
+		}},
+		EvidencePaths: map[string][]string{
+			"a": {"delivery.zip/plugins/shared.jar/META-INF/MANIFEST.MF"},
+			"b": {"delivery.zip/plugins/shared.jar/META-INF/MANIFEST.MF"},
+		},
+	}}
+
+	bom, err := Assemble(tree, scans, cfg)
+	if err != nil {
+		t.Fatalf("Assemble error: %v", err)
+	}
+	if bom.Components == nil {
+		t.Fatal("Components is nil")
+	}
+
+	foundA := false
+	foundB := false
+	for _, comp := range *bom.Components {
+		if comp.Name == "pkg-a" {
+			foundA = true
+		}
+		if comp.Name == "pkg-b" {
+			foundB = true
+		}
+	}
+
+	if !foundA || !foundB {
+		t.Fatalf("expected both strong components to remain (foundA=%t, foundB=%t)", foundA, foundB)
+	}
+}

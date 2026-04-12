@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"sort"
 	"strings"
 	"time"
@@ -68,6 +69,7 @@ type ReportData struct { //nolint:revive // stuttering is acceptable for clarity
 
 type componentOccurrence struct {
 	ObjectID      string
+	ComponentType cdx.ComponentType
 	PackageName   string
 	Version       string
 	PURL          string
@@ -75,6 +77,71 @@ type componentOccurrence struct {
 	EvidencePaths []string
 	FoundBy       string
 }
+
+type componentIndexStats struct {
+	TotalComponents               int
+	MissingDeliveryPath           int
+	FilteredContainerNodes        int
+	FilteredAbsolutePathNames     int
+	FilteredLowValueFileArtifacts int
+	DuplicateMerged               int
+	IndexedComponents             int
+}
+
+type extractionStats struct {
+	Total           int
+	Extracted       int
+	SyftNative      int
+	Failed          int
+	Skipped         int
+	ToolMissing     int
+	SecurityBlocked int
+	Pending         int
+	Other           int
+
+	FailedPaths          []string
+	ToolMissingPaths     []string
+	SecurityBlockedPaths []string
+}
+
+type scanStats struct {
+	Total      int
+	Successful int
+	Errors     int
+	ErrorPaths []string
+}
+
+type policyStats struct {
+	Total    int
+	Continue int
+	Skip     int
+	Abort    int
+}
+
+type processingEntry struct {
+	Source   string
+	Location string
+	Detail   string
+}
+
+type reportSection struct {
+	title  string
+	anchor string
+}
+
+const (
+	anchorInputFile        = "input-file"
+	anchorConfig           = "configuration"
+	anchorRootMetadata     = "root-sbom-metadata"
+	anchorSandbox          = "sandbox-configuration"
+	anchorSummary          = "summary"
+	anchorProcessingErrors = "processing-errors"
+	anchorResidualRisk     = "residual-risk-and-limitations"
+	anchorPolicy           = "policy-decisions"
+	anchorComponentIndex   = "component-occurrence-index"
+	anchorScan             = "scan-results"
+	anchorExtraction       = "extraction-log"
+)
 
 // ComputeInputSummary computes the file hashes and metadata for the input file.
 // This is called once by the orchestrator before any processing begins.
@@ -123,14 +190,19 @@ func ComputeInputSummary(path string) (InputSummary, error) {
 // Returns an error if writing fails.
 func GenerateHuman(data ReportData, lang string, w io.Writer) error {
 	t := getTranslations(lang)
+	sections := reportSections(t)
+	occurrences, indexStats := collectComponentOccurrences(data.BOM)
+	extStats := collectExtractionStats(data.Tree)
+	scnStats := collectScanStats(data.Scans)
+	polStats := collectPolicyStats(data.PolicyDecisions)
 
 	fmt.Fprintf(w, "# %s\n\n", t.title)
 	fmt.Fprintf(w, "## %s\n\n", t.tableOfContentsSection)
-	writeTableOfContents(w, t)
+	writeTableOfContents(w, sections)
 	fmt.Fprintln(w)
 
 	// Input identification.
-	fmt.Fprintf(w, "## %s\n\n", t.inputSection)
+	writeSectionHeading(w, t.inputSection, anchorInputFile)
 	fmt.Fprintf(w, "| %s | %s |\n", t.field, t.value)
 	fmt.Fprintf(w, "|---|---|\n")
 	fmt.Fprintf(w, "| %s | `%s` |\n", t.filename, data.Input.Filename)
@@ -140,7 +212,7 @@ func GenerateHuman(data ReportData, lang string, w io.Writer) error {
 	fmt.Fprintln(w)
 
 	// Configuration snapshot.
-	fmt.Fprintf(w, "## %s\n\n", t.configSection)
+	writeSectionHeading(w, t.configSection, anchorConfig)
 	fmt.Fprintf(w, "| %s | %s |\n", t.setting, t.value)
 	fmt.Fprintf(w, "|---|---|\n")
 	fmt.Fprintf(w, "| %s | %s |\n", t.policyMode, data.Config.PolicyMode)
@@ -157,11 +229,11 @@ func GenerateHuman(data ReportData, lang string, w io.Writer) error {
 	fmt.Fprintln(w)
 
 	// Root SBOM metadata.
-	fmt.Fprintf(w, "## %s\n\n", t.rootMetadataSection)
+	writeSectionHeading(w, t.rootMetadataSection, anchorRootMetadata)
 	writeRootMetadata(w, data, t)
 
 	// Sandbox information.
-	fmt.Fprintf(w, "## %s\n\n", t.sandboxSection)
+	writeSectionHeading(w, t.sandboxSection, anchorSandbox)
 	fmt.Fprintf(w, "| %s | %s |\n", t.setting, t.value)
 	fmt.Fprintf(w, "|---|---|\n")
 	fmt.Fprintf(w, "| %s | %s |\n", t.sandboxName, data.SandboxInfo.Name)
@@ -171,13 +243,33 @@ func GenerateHuman(data ReportData, lang string, w io.Writer) error {
 	}
 	fmt.Fprintln(w)
 
+	// Summary.
+	writeSectionHeading(w, t.summarySection, anchorSummary)
+	writeSummary(w, data, extStats, scnStats, polStats, indexStats, t)
+	fmt.Fprintln(w)
+
+	// Processing issues.
+	writeSectionHeading(w, t.processingIssuesSection, anchorProcessingErrors)
+	writeProcessingIssues(w, data, extStats, scnStats, t)
+	fmt.Fprintln(w)
+
+	// Residual risk.
+	writeSectionHeading(w, t.residualRiskSection, anchorResidualRisk)
+	writeResidualRisk(w, data, extStats, scnStats, indexStats, t)
+	fmt.Fprintln(w)
+
+	// Policy decisions.
+	writeSectionHeading(w, t.policySection, anchorPolicy)
+	writePolicyDecisions(w, data.PolicyDecisions, t)
+	fmt.Fprintln(w)
+
 	// Component occurrence index.
-	fmt.Fprintf(w, "## %s\n\n", t.componentIndexSection)
-	writeComponentOccurrenceIndex(w, data.BOM, t)
+	writeSectionHeading(w, t.componentIndexSection, anchorComponentIndex)
+	writeComponentOccurrenceIndex(w, occurrences, t)
 	fmt.Fprintln(w)
 
 	// Scan results.
-	fmt.Fprintf(w, "## %s\n\n", t.scanSection)
+	writeSectionHeading(w, t.scanSection, anchorScan)
 	for _, sr := range data.Scans {
 		evidencePaths := scan.FlattenEvidencePaths(sr)
 		switch {
@@ -195,35 +287,11 @@ func GenerateHuman(data ReportData, lang string, w io.Writer) error {
 	fmt.Fprintln(w)
 
 	// Extraction log.
-	fmt.Fprintf(w, "## %s\n\n", t.extractionSection)
+	writeSectionHeading(w, t.extractionSection, anchorExtraction)
 	writeExtractionTree(w, data.Tree, 0, t)
 	fmt.Fprintln(w)
 
-	// Policy decisions.
-	if len(data.PolicyDecisions) > 0 {
-		fmt.Fprintf(w, "## %s\n\n", t.policySection)
-		for _, d := range data.PolicyDecisions {
-			fmt.Fprintf(w, "- **%s** at `%s`: %s → %s\n", d.Trigger, d.NodePath, d.Detail, d.Action)
-		}
-		fmt.Fprintln(w)
-	}
-
-	// Summary.
-	fmt.Fprintf(w, "## %s\n\n", t.summarySection)
-	duration := data.EndTime.Sub(data.StartTime)
-	fmt.Fprintf(w, "%s: %s\n\n", t.processingTime, duration.Round(time.Millisecond))
-
-	if len(data.ProcessingIssues) > 0 {
-		fmt.Fprintf(w, "## %s\n\n", t.processingIssuesSection)
-		for _, issue := range data.ProcessingIssues {
-			fmt.Fprintf(w, "- **%s**: %s\n", issue.Stage, issue.Message)
-		}
-		fmt.Fprintln(w)
-	}
-
-	// Residual risk.
-	fmt.Fprintf(w, "## %s\n\n", t.residualRiskSection)
-	writeResidualRisk(w, data, t)
+	fmt.Fprintf(w, "%s\n", t.endOfReport)
 
 	return nil
 }
@@ -479,6 +547,15 @@ type translations struct {
 	suppliedBy              string
 	derived                 string
 	residualRiskText        string
+	noPolicyDecisions       string
+	noProcessingIssues      string
+	summaryExtraction       string
+	summaryScan             string
+	summaryComponents       string
+	summaryPolicies         string
+	summaryProcessingIssues string
+	summaryFindings         string
+	endOfReport             string
 }
 
 func getTranslations(lang string) translations {
@@ -538,6 +615,15 @@ func getTranslations(lang string) translations {
 			suppliedBy:              "Durch Benutzer angegeben",
 			derived:                 "Automatisch abgeleitet",
 			residualRiskText:        "Die folgenden Einschränkungen können die Vollständigkeit der Ergebnisse beeinflussen:",
+			noPolicyDecisions:       "Keine Richtlinienentscheidungen protokolliert.",
+			noProcessingIssues:      "Keine Verarbeitungsfehler protokolliert.",
+			summaryExtraction:       "Extraktion",
+			summaryScan:             "Scans",
+			summaryComponents:       "Komponentenindex",
+			summaryPolicies:         "Richtlinienentscheidungen",
+			summaryProcessingIssues: "Verarbeitungsfehler",
+			summaryFindings:         "Wesentliche Befunde",
+			endOfReport:             "Ende des Berichts.",
 		}
 	default:
 		return translations{
@@ -594,6 +680,15 @@ func getTranslations(lang string) translations {
 			suppliedBy:              "User-supplied",
 			derived:                 "Auto-derived",
 			residualRiskText:        "The following limitations may affect the completeness of the results:",
+			noPolicyDecisions:       "No policy decisions recorded.",
+			noProcessingIssues:      "No processing issues recorded.",
+			summaryExtraction:       "Extraction",
+			summaryScan:             "Scans",
+			summaryComponents:       "Component index",
+			summaryPolicies:         "Policy decisions",
+			summaryProcessingIssues: "Processing issues",
+			summaryFindings:         "Key findings",
+			endOfReport:             "End of report.",
 		}
 	}
 }
@@ -635,34 +730,219 @@ func writeRootMetadata(w io.Writer, data ReportData, t translations) {
 	fmt.Fprintln(w)
 }
 
-func writeTableOfContents(w io.Writer, t translations) {
-	for _, section := range []string{
-		t.inputSection,
-		t.configSection,
-		t.rootMetadataSection,
-		t.sandboxSection,
-		t.componentIndexSection,
-		t.scanSection,
-		t.extractionSection,
-		t.policySection,
-		t.summarySection,
-		t.processingIssuesSection,
-		t.residualRiskSection,
-	} {
-		fmt.Fprintf(w, "- %s\n", section)
+func reportSections(t translations) []reportSection {
+	return []reportSection{
+		{title: t.inputSection, anchor: anchorInputFile},
+		{title: t.configSection, anchor: anchorConfig},
+		{title: t.rootMetadataSection, anchor: anchorRootMetadata},
+		{title: t.sandboxSection, anchor: anchorSandbox},
+		{title: t.summarySection, anchor: anchorSummary},
+		{title: t.processingIssuesSection, anchor: anchorProcessingErrors},
+		{title: t.residualRiskSection, anchor: anchorResidualRisk},
+		{title: t.policySection, anchor: anchorPolicy},
+		{title: t.componentIndexSection, anchor: anchorComponentIndex},
+		{title: t.scanSection, anchor: anchorScan},
+		{title: t.extractionSection, anchor: anchorExtraction},
 	}
 }
 
-func writeComponentOccurrenceIndex(w io.Writer, bom *cdx.BOM, t translations) {
+func writeSectionHeading(w io.Writer, title, anchor string) {
+	fmt.Fprintf(w, "<a id=\"%s\"></a>\n\n## %s\n\n", anchor, title)
+}
+
+func writeTableOfContents(w io.Writer, sections []reportSection) {
+	for _, section := range sections {
+		fmt.Fprintf(w, "- [%s](#%s)\n", section.title, section.anchor)
+	}
+}
+
+func writePolicyDecisions(w io.Writer, decisions []policy.Decision, t translations) {
+	if len(decisions) == 0 {
+		fmt.Fprintf(w, "- %s\n", t.noPolicyDecisions)
+		return
+	}
+
+	for _, d := range decisions {
+		fmt.Fprintf(w, "- **%s** at `%s`: %s -> %s\n", d.Trigger, d.NodePath, d.Detail, d.Action)
+	}
+}
+
+func writeSummary(w io.Writer, data ReportData, ext extractionStats, scn scanStats, pol policyStats, idx componentIndexStats, t translations) {
+	duration := data.EndTime.Sub(data.StartTime).Round(time.Millisecond)
+
+	fmt.Fprintf(w, "- %s: %s\n", t.processingTime, duration)
+	fmt.Fprintf(
+		w,
+		"- %s: total=%d extracted=%d syft-native=%d failed=%d tool-missing=%d skipped=%d security-blocked=%d pending=%d\n",
+		t.summaryExtraction,
+		ext.Total,
+		ext.Extracted,
+		ext.SyftNative,
+		ext.Failed,
+		ext.ToolMissing,
+		ext.Skipped,
+		ext.SecurityBlocked,
+		ext.Pending,
+	)
+	fmt.Fprintf(w, "- %s: total=%d successful=%d errors=%d\n", t.summaryScan, scn.Total, scn.Successful, scn.Errors)
+	fmt.Fprintf(
+		w,
+		"- %s: indexed=%d total-bom-components=%d filtered-abs-path=%d filtered-low-value-files=%d merged-duplicates=%d\n",
+		t.summaryComponents,
+		idx.IndexedComponents,
+		idx.TotalComponents,
+		idx.FilteredAbsolutePathNames,
+		idx.FilteredLowValueFileArtifacts,
+		idx.DuplicateMerged,
+	)
+	fmt.Fprintf(w, "- %s: total=%d continue=%d skip=%d abort=%d\n", t.summaryPolicies, pol.Total, pol.Continue, pol.Skip, pol.Abort)
+	fmt.Fprintf(w, "- %s: pipeline=%d\n", t.summaryProcessingIssues, len(data.ProcessingIssues))
+
+	fmt.Fprintf(w, "\n%s:\n", t.summaryFindings)
+	findings := summarizeFindings(data, ext, scn, idx)
+	for _, finding := range findings {
+		fmt.Fprintf(w, "- %s\n", finding)
+	}
+}
+
+func summarizeFindings(data ReportData, ext extractionStats, scn scanStats, idx componentIndexStats) []string {
+	findings := make([]string, 0, 6)
+	if ext.ToolMissing > 0 {
+		findings = append(findings, fmt.Sprintf("%d extraction nodes require unavailable external tools.", ext.ToolMissing))
+	}
+	if ext.Failed > 0 || ext.SecurityBlocked > 0 {
+		findings = append(findings, fmt.Sprintf("%d extraction nodes failed or were blocked.", ext.Failed+ext.SecurityBlocked))
+	}
+	if scn.Errors > 0 {
+		findings = append(findings, fmt.Sprintf("%d Syft scan targets failed.", scn.Errors))
+	}
+	if data.SandboxInfo.UnsafeOvr {
+		findings = append(findings, "Run executed with --unsafe; process isolation was not enforced.")
+	}
+	if idx.FilteredAbsolutePathNames > 0 || idx.FilteredLowValueFileArtifacts > 0 || idx.DuplicateMerged > 0 {
+		findings = append(
+			findings,
+			fmt.Sprintf(
+				"Index quality controls removed %d absolute-path artifacts, %d low-value file artifacts, and merged %d duplicate placeholders.",
+				idx.FilteredAbsolutePathNames,
+				idx.FilteredLowValueFileArtifacts,
+				idx.DuplicateMerged,
+			),
+		)
+	}
+	if len(findings) == 0 {
+		findings = append(findings, "No critical processing limitations detected in this run.")
+	}
+	return findings
+}
+
+func writeProcessingIssues(w io.Writer, data ReportData, ext extractionStats, scn scanStats, t translations) {
+	entries := collectProcessingEntries(data)
+
+	fmt.Fprintf(w, "- pipeline: %d\n", len(data.ProcessingIssues))
+	fmt.Fprintf(w, "- extraction-failed: %d\n", ext.Failed+ext.SecurityBlocked)
+	fmt.Fprintf(w, "- extraction-tool-missing: %d\n", ext.ToolMissing)
+	fmt.Fprintf(w, "- scan-errors: %d\n", scn.Errors)
+
+	if len(entries) == 0 {
+		fmt.Fprintf(w, "\n- %s\n", t.noProcessingIssues)
+		return
+	}
+
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "| Source | Location | Detail |")
+	fmt.Fprintln(w, "|---|---|---|")
+
+	maxRows := 25
+	for i, entry := range entries {
+		if i >= maxRows {
+			remaining := len(entries) - maxRows
+			fmt.Fprintf(w, "| ... | ... | %d additional entries omitted for brevity |\n", remaining)
+			break
+		}
+		fmt.Fprintf(
+			w,
+			"| %s | %s | %s |\n",
+			escapeMarkdownCell(entry.Source),
+			escapeMarkdownCell(entry.Location),
+			escapeMarkdownCell(entry.Detail),
+		)
+	}
+}
+
+func collectProcessingEntries(data ReportData) []processingEntry {
+	entries := make([]processingEntry, 0, len(data.ProcessingIssues)+len(data.Scans))
+
+	for _, issue := range data.ProcessingIssues {
+		entries = append(entries, processingEntry{
+			Source:   "pipeline",
+			Location: issue.Stage,
+			Detail:   issue.Message,
+		})
+	}
+
+	var walk func(node *extract.ExtractionNode)
+	walk = func(node *extract.ExtractionNode) {
+		if node == nil {
+			return
+		}
+		if node.Status == extract.StatusFailed || node.Status == extract.StatusToolMissing || node.Status == extract.StatusSecurityBlocked {
+			detail := node.StatusDetail
+			if detail == "" {
+				detail = "status=" + node.Status.String()
+			}
+			entries = append(entries, processingEntry{
+				Source:   "extraction",
+				Location: node.Path,
+				Detail:   detail,
+			})
+		}
+		for _, child := range node.Children {
+			walk(child)
+		}
+	}
+	walk(data.Tree)
+
+	for _, sr := range data.Scans {
+		if sr.Error == nil {
+			continue
+		}
+		entries = append(entries, processingEntry{
+			Source:   "scan",
+			Location: sr.NodePath,
+			Detail:   sr.Error.Error(),
+		})
+	}
+
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].Source != entries[j].Source {
+			return entries[i].Source < entries[j].Source
+		}
+		if entries[i].Location != entries[j].Location {
+			return entries[i].Location < entries[j].Location
+		}
+		return entries[i].Detail < entries[j].Detail
+	})
+
+	return entries
+}
+
+func escapeMarkdownCell(value string) string {
+	value = strings.ReplaceAll(value, "|", "\\|")
+	value = strings.ReplaceAll(value, "\n", " ")
+	return value
+}
+
+func writeComponentOccurrenceIndex(w io.Writer, occurrences []componentOccurrence, t translations) {
 	fmt.Fprintf(w, "%s\n\n", t.componentIndexLead)
 
-	occurrences := collectComponentOccurrences(bom)
 	if len(occurrences) == 0 {
 		fmt.Fprintf(w, "- %s\n", t.noIndexedComponents)
 		return
 	}
 
-	for _, occ := range occurrences {
+	for i := range occurrences {
+		occ := occurrences[i]
 		fmt.Fprintf(w, "### %s\n\n", occ.ObjectID)
 		fmt.Fprintf(w, "- %s: `%s`\n", t.packageName, occ.PackageName)
 		if occ.Version != "" {
@@ -682,62 +962,223 @@ func writeComponentOccurrenceIndex(w io.Writer, bom *cdx.BOM, t translations) {
 		if occ.FoundBy != "" {
 			fmt.Fprintf(w, "- %s: `%s`\n", t.foundBy, occ.FoundBy)
 		}
-		fmt.Fprintf(w, "- %s: `%s`\n\n", t.objectID, occ.ObjectID)
+		fmt.Fprintln(w)
 	}
 }
 
-func collectComponentOccurrences(bom *cdx.BOM) []componentOccurrence {
+func collectComponentOccurrences(bom *cdx.BOM) ([]componentOccurrence, componentIndexStats) {
+	stats := componentIndexStats{}
 	if bom == nil || bom.Components == nil {
-		return nil
+		return nil, stats
 	}
 
 	occurrences := make([]componentOccurrence, 0, len(*bom.Components))
 	for i := range *bom.Components {
 		comp := (*bom.Components)[i]
+		stats.TotalComponents++
 		deliveryPaths := componentPropertyValues(comp, "extract-sbom:delivery-path")
 		if len(deliveryPaths) == 0 {
+			stats.MissingDeliveryPath++
 			continue
 		}
 		if len(componentPropertyValues(comp, "extract-sbom:extraction-status")) > 0 {
+			stats.FilteredContainerNodes++
 			continue
 		}
-		// Skip file-cataloger artifacts whose Name is an absolute filesystem
-		// path (temp extraction directory). These are noise entries without
-		// proper package identification.
+
+		foundBy := firstComponentPropertyValue(comp, "syft:package:foundBy")
 		if strings.HasPrefix(comp.Name, "/") {
+			stats.FilteredAbsolutePathNames++
+			continue
+		}
+		if isLowValueFileArtifact(comp, foundBy) {
+			stats.FilteredLowValueFileArtifacts++
 			continue
 		}
 
 		occurrences = append(occurrences, componentOccurrence{
 			ObjectID:      comp.BOMRef,
+			ComponentType: comp.Type,
 			PackageName:   comp.Name,
 			Version:       comp.Version,
 			PURL:          comp.PackageURL,
 			DeliveryPath:  deliveryPaths[0],
 			EvidencePaths: componentPropertyValues(comp, "extract-sbom:evidence-path"),
-			FoundBy:       firstComponentPropertyValue(comp, "syft:package:foundBy"),
+			FoundBy:       foundBy,
 		})
 	}
 
-	sort.Slice(occurrences, func(i, j int) bool {
-		if occurrences[i].DeliveryPath != occurrences[j].DeliveryPath {
-			return occurrences[i].DeliveryPath < occurrences[j].DeliveryPath
-		}
-		iEvidence := firstString(occurrences[i].EvidencePaths)
-		jEvidence := firstString(occurrences[j].EvidencePaths)
-		if iEvidence != jEvidence {
-			return iEvidence < jEvidence
-		}
-		if occurrences[i].PackageName != occurrences[j].PackageName {
-			return occurrences[i].PackageName < occurrences[j].PackageName
-		}
-		if occurrences[i].Version != occurrences[j].Version {
-			return occurrences[i].Version < occurrences[j].Version
-		}
-		return occurrences[i].ObjectID < occurrences[j].ObjectID
-	})
+	occurrences = mergeDuplicateOccurrences(occurrences, &stats)
 
-	return occurrences
+	sort.Slice(occurrences, func(i, j int) bool {
+		return compareOccurrence(occurrences[i], occurrences[j]) < 0
+	})
+	stats.IndexedComponents = len(occurrences)
+
+	return occurrences, stats
+}
+
+func compareOccurrence(a, b componentOccurrence) int {
+	if a.DeliveryPath != b.DeliveryPath {
+		if a.DeliveryPath < b.DeliveryPath {
+			return -1
+		}
+		return 1
+	}
+	aEvidence := firstString(a.EvidencePaths)
+	bEvidence := firstString(b.EvidencePaths)
+	if aEvidence != bEvidence {
+		if aEvidence < bEvidence {
+			return -1
+		}
+		return 1
+	}
+	if a.PackageName != b.PackageName {
+		if a.PackageName < b.PackageName {
+			return -1
+		}
+		return 1
+	}
+	if a.Version != b.Version {
+		if a.Version < b.Version {
+			return -1
+		}
+		return 1
+	}
+	if a.PURL != b.PURL {
+		if a.PURL < b.PURL {
+			return -1
+		}
+		return 1
+	}
+	if a.FoundBy != b.FoundBy {
+		if a.FoundBy < b.FoundBy {
+			return -1
+		}
+		return 1
+	}
+	if a.ObjectID < b.ObjectID {
+		return -1
+	}
+	if a.ObjectID > b.ObjectID {
+		return 1
+	}
+	return 0
+}
+
+func mergeDuplicateOccurrences(occurrences []componentOccurrence, stats *componentIndexStats) []componentOccurrence {
+	if len(occurrences) < 2 {
+		return occurrences
+	}
+
+	groups := make(map[string][]componentOccurrence)
+	keys := make([]string, 0)
+	for i := range occurrences {
+		occ := occurrences[i]
+		key := occurrenceLocusKey(occ)
+		if _, exists := groups[key]; !exists {
+			keys = append(keys, key)
+		}
+		groups[key] = append(groups[key], occ)
+	}
+	sort.Strings(keys)
+
+	merged := make([]componentOccurrence, 0, len(occurrences))
+	for _, key := range keys {
+		group := groups[key]
+		if len(group) == 1 {
+			merged = append(merged, group[0])
+			continue
+		}
+
+		best := pickBestOccurrence(group)
+		if shouldCollapseDuplicateGroup(group, best) {
+			merged = append(merged, best)
+			stats.DuplicateMerged += len(group) - 1
+			continue
+		}
+
+		merged = append(merged, group...)
+	}
+
+	return merged
+}
+
+func occurrenceLocusKey(occ componentOccurrence) string {
+	evidence := append([]string(nil), occ.EvidencePaths...)
+	sort.Strings(evidence)
+	return occ.DeliveryPath + "\x00" + strings.Join(evidence, "\x1f")
+}
+
+func pickBestOccurrence(group []componentOccurrence) componentOccurrence {
+	best := group[0]
+	bestScore := occurrenceQualityScore(best)
+	for i := 1; i < len(group); i++ {
+		score := occurrenceQualityScore(group[i])
+		if score > bestScore || (score == bestScore && compareOccurrence(group[i], best) < 0) {
+			best = group[i]
+			bestScore = score
+		}
+	}
+	return best
+}
+
+func occurrenceQualityScore(occ componentOccurrence) int {
+	score := 0
+	if occ.PURL != "" {
+		score += 4
+	}
+	if occ.FoundBy != "" {
+		score += 3
+	}
+	if occ.Version != "" {
+		score += 2
+	}
+	if occ.PackageName != "" && !strings.Contains(occ.PackageName, "/") {
+		score++
+	}
+	return score
+}
+
+func shouldCollapseDuplicateGroup(group []componentOccurrence, best componentOccurrence) bool {
+	if occurrenceQualityScore(best) < 4 {
+		return false
+	}
+
+	for i := range group {
+		occ := group[i]
+		if occ.ObjectID == best.ObjectID {
+			continue
+		}
+		if !isWeakArtifactOccurrence(occ) {
+			return false
+		}
+	}
+
+	return true
+}
+
+func isWeakArtifactOccurrence(occ componentOccurrence) bool {
+	if occ.PURL != "" || occ.FoundBy != "" || occ.Version != "" {
+		return false
+	}
+	if occ.PackageName == "" {
+		return true
+	}
+	if strings.Contains(occ.PackageName, "/") {
+		return true
+	}
+
+	base := path.Base(occ.DeliveryPath)
+	baseNoExt := strings.TrimSuffix(base, path.Ext(base))
+	return strings.EqualFold(occ.PackageName, base) || strings.EqualFold(occ.PackageName, baseNoExt)
+}
+
+func isLowValueFileArtifact(comp cdx.Component, foundBy string) bool {
+	if comp.Type != cdx.ComponentTypeFile {
+		return false
+	}
+	return comp.PackageURL == "" && comp.Version == "" && foundBy == ""
 }
 
 func componentPropertyValues(comp cdx.Component, name string) []string {
@@ -797,33 +1238,55 @@ func writeExtractionTree(w io.Writer, node *extract.ExtractionNode, depth int, t
 	}
 }
 
-func writeResidualRisk(w io.Writer, data ReportData, t translations) {
+func writeResidualRisk(w io.Writer, data ReportData, ext extractionStats, scn scanStats, idx componentIndexStats, t translations) {
 	fmt.Fprintln(w, t.residualRiskText)
 	fmt.Fprintln(w)
 
 	risks := []string{}
 
-	// Check for incomplete extractions.
-	if hasIncomplete(data.Tree) {
-		risks = append(risks, "Some archive subtrees could not be fully extracted or scanned.")
+	if ext.ToolMissing > 0 {
+		risks = append(
+			risks,
+			fmt.Sprintf(
+				"%d extraction nodes require unavailable tools (e.g. 7zz or unshield). Examples: %s.",
+				ext.ToolMissing,
+				samplePaths(ext.ToolMissingPaths, 3),
+			),
+		)
 	}
-
-	// Check for missing tools.
-	if hasToolMissing(data.Tree) {
-		risks = append(risks, "Required extraction tools are missing for some archive formats.")
+	if ext.Failed > 0 || ext.SecurityBlocked > 0 {
+		risks = append(
+			risks,
+			fmt.Sprintf(
+				"%d extraction nodes failed or were security-blocked. Examples: %s.",
+				ext.Failed+ext.SecurityBlocked,
+				samplePaths(append(append([]string{}, ext.FailedPaths...), ext.SecurityBlockedPaths...), 3),
+			),
+		)
 	}
-
-	// Check for scan errors.
-	for _, sr := range data.Scans {
-		if sr.Error != nil {
-			risks = append(risks, "One or more Syft scans produced errors; some components may be missing.")
-			break
-		}
+	if scn.Errors > 0 {
+		risks = append(
+			risks,
+			fmt.Sprintf(
+				"%d Syft scan targets failed. Example nodes: %s.",
+				scn.Errors,
+				samplePaths(scn.ErrorPaths, 3),
+			),
+		)
 	}
-
-	// Check for unsafe mode.
 	if data.SandboxInfo.UnsafeOvr {
 		risks = append(risks, "Extraction ran without sandbox isolation (--unsafe). Process-level containment was not enforced.")
+	}
+	if idx.FilteredAbsolutePathNames > 0 || idx.FilteredLowValueFileArtifacts > 0 || idx.DuplicateMerged > 0 {
+		risks = append(
+			risks,
+			fmt.Sprintf(
+				"Component index quality filters removed %d absolute-path artifacts, %d low-value file artifacts, and merged %d duplicate placeholders.",
+				idx.FilteredAbsolutePathNames,
+				idx.FilteredLowValueFileArtifacts,
+				idx.DuplicateMerged,
+			),
+		)
 	}
 
 	if len(risks) == 0 {
@@ -835,33 +1298,96 @@ func writeResidualRisk(w io.Writer, data ReportData, t translations) {
 	}
 }
 
-func hasIncomplete(node *extract.ExtractionNode) bool {
-	if node == nil {
-		return false
+func samplePaths(paths []string, maxCount int) string {
+	if len(paths) == 0 {
+		return "none"
 	}
-	if node.Status == extract.StatusFailed || node.Status == extract.StatusSkipped ||
-		node.Status == extract.StatusSecurityBlocked {
-		return true
-	}
-	for _, child := range node.Children {
-		if hasIncomplete(child) {
-			return true
+
+	unique := make([]string, 0, len(paths))
+	seen := make(map[string]struct{}, len(paths))
+	for _, p := range paths {
+		if p == "" {
+			continue
 		}
+		if _, ok := seen[p]; ok {
+			continue
+		}
+		seen[p] = struct{}{}
+		unique = append(unique, p)
 	}
-	return false
+
+	sort.Strings(unique)
+	if len(unique) <= maxCount {
+		return strings.Join(unique, "; ")
+	}
+	return strings.Join(unique[:maxCount], "; ") + fmt.Sprintf(" (+%d more)", len(unique)-maxCount)
 }
 
-func hasToolMissing(node *extract.ExtractionNode) bool {
-	if node == nil {
-		return false
-	}
-	if node.Status == extract.StatusToolMissing {
-		return true
-	}
-	for _, child := range node.Children {
-		if hasToolMissing(child) {
-			return true
+func collectExtractionStats(node *extract.ExtractionNode) extractionStats {
+	stats := extractionStats{}
+
+	var walk func(n *extract.ExtractionNode)
+	walk = func(n *extract.ExtractionNode) {
+		if n == nil {
+			return
+		}
+
+		stats.Total++
+		switch n.Status {
+		case extract.StatusExtracted:
+			stats.Extracted++
+		case extract.StatusSyftNative:
+			stats.SyftNative++
+		case extract.StatusFailed:
+			stats.Failed++
+			stats.FailedPaths = append(stats.FailedPaths, n.Path)
+		case extract.StatusSkipped:
+			stats.Skipped++
+		case extract.StatusToolMissing:
+			stats.ToolMissing++
+			stats.ToolMissingPaths = append(stats.ToolMissingPaths, n.Path)
+		case extract.StatusSecurityBlocked:
+			stats.SecurityBlocked++
+			stats.SecurityBlockedPaths = append(stats.SecurityBlockedPaths, n.Path)
+		case extract.StatusPending:
+			stats.Pending++
+		default:
+			stats.Other++
+		}
+
+		for _, child := range n.Children {
+			walk(child)
 		}
 	}
-	return false
+
+	walk(node)
+	return stats
+}
+
+func collectScanStats(scans []scan.ScanResult) scanStats {
+	stats := scanStats{Total: len(scans)}
+	for _, sr := range scans {
+		if sr.Error != nil {
+			stats.Errors++
+			stats.ErrorPaths = append(stats.ErrorPaths, sr.NodePath)
+			continue
+		}
+		stats.Successful++
+	}
+	return stats
+}
+
+func collectPolicyStats(decisions []policy.Decision) policyStats {
+	stats := policyStats{Total: len(decisions)}
+	for _, d := range decisions {
+		switch d.Action {
+		case policy.ActionContinue:
+			stats.Continue++
+		case policy.ActionSkip:
+			stats.Skip++
+		case policy.ActionAbort:
+			stats.Abort++
+		}
+	}
+	return stats
 }

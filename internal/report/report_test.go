@@ -142,11 +142,14 @@ func TestGenerateHumanContainsRequiredSections(t *testing.T) {
 		"## Configuration",
 		"## Root SBOM Metadata",
 		"## Sandbox Configuration",
+		"## Summary",
+		"## Processing Errors",
+		"## Residual Risk and Limitations",
+		"## Policy Decisions",
 		"## Component Occurrence Index",
 		"## Extraction Log",
 		"## Scan Results",
-		"## Summary",
-		"## Residual Risk and Limitations",
+		"End of report.",
 	}
 
 	for _, section := range requiredSections {
@@ -278,8 +281,67 @@ func TestGenerateHumanWithProcessingIssues(t *testing.T) {
 	if !strings.Contains(output, "## Processing Errors") {
 		t.Fatal("report does not contain Processing Errors section")
 	}
-	if !strings.Contains(output, "**assembly**: failed to merge components") {
+	if !strings.Contains(output, "| pipeline | assembly | failed to merge components |") {
 		t.Fatal("report does not contain processing issue details")
+	}
+}
+
+// TestGenerateHumanTOCContainsAnchorLinks verifies that the Table of Contents
+// includes clickable anchor links for all major sections.
+func TestGenerateHumanTOCContainsAnchorLinks(t *testing.T) {
+	t.Parallel()
+
+	data := makeTestReportData()
+	var buf bytes.Buffer
+
+	if err := GenerateHuman(data, "en", &buf); err != nil {
+		t.Fatalf("GenerateHuman error: %v", err)
+	}
+	output := buf.String()
+
+	for _, link := range []string{
+		"- [Input File](#input-file)",
+		"- [Configuration](#configuration)",
+		"- [Summary](#summary)",
+		"- [Processing Errors](#processing-errors)",
+		"- [Residual Risk and Limitations](#residual-risk-and-limitations)",
+		"- [Policy Decisions](#policy-decisions)",
+		"- [Scan Results](#scan-results)",
+		"- [Extraction Log](#extraction-log)",
+	} {
+		if !strings.Contains(output, link) {
+			t.Fatalf("report table of contents missing %q", link)
+		}
+	}
+}
+
+// TestGenerateHumanSectionOrderPutsExecutiveSectionsFirst verifies that
+// Summary/Errors/Risk appear before the large Scan/Extraction bulk sections.
+func TestGenerateHumanSectionOrderPutsExecutiveSectionsFirst(t *testing.T) {
+	t.Parallel()
+
+	data := makeTestReportData()
+	var buf bytes.Buffer
+
+	if err := GenerateHuman(data, "en", &buf); err != nil {
+		t.Fatalf("GenerateHuman error: %v", err)
+	}
+	output := buf.String()
+
+	summaryIdx := strings.Index(output, "## Summary")
+	errorsIdx := strings.Index(output, "## Processing Errors")
+	riskIdx := strings.Index(output, "## Residual Risk and Limitations")
+	scanIdx := strings.Index(output, "## Scan Results")
+	extractionIdx := strings.Index(output, "## Extraction Log")
+
+	if summaryIdx == -1 || errorsIdx == -1 || riskIdx == -1 || scanIdx == -1 || extractionIdx == -1 {
+		t.Fatal("one or more expected sections are missing")
+	}
+
+	if summaryIdx >= scanIdx || summaryIdx >= extractionIdx ||
+		errorsIdx >= scanIdx || errorsIdx >= extractionIdx ||
+		riskIdx >= scanIdx || riskIdx >= extractionIdx {
+		t.Fatal("summary/errors/risk sections are not placed before scan/extraction sections")
 	}
 }
 
@@ -356,7 +418,6 @@ func TestGenerateHumanComponentIndexUsesFinalBOMRefs(t *testing.T) {
 	}
 
 	for _, fragment := range []string{
-		"Object ID: `extract-sbom:AAAA_AAAA`",
 		"Package: `alpha`",
 		"PURL: `pkg:maven/com.acme/alpha@1.0.0`",
 		"Delivery path: `a/path/alpha.jar`",
@@ -366,6 +427,9 @@ func TestGenerateHumanComponentIndexUsesFinalBOMRefs(t *testing.T) {
 		if !strings.Contains(output, fragment) {
 			t.Fatalf("report output missing %q", fragment)
 		}
+	}
+	if strings.Contains(output, "Object ID: `extract-sbom:AAAA_AAAA`") {
+		t.Fatal("object-id line should not be repeated when object id is already the heading")
 	}
 }
 
@@ -409,6 +473,51 @@ func TestGenerateHumanComponentIndexFiltersAbsPathNames(t *testing.T) {
 	}
 	if strings.Contains(output, "/tmp/extract-sbom-zip-12345") {
 		t.Error("temp extraction path leaked into report")
+	}
+}
+
+// TestGenerateHumanComponentIndexMergesWeakDuplicatePlaceholders verifies
+// that when two entries point to the same delivery/evidence location, a
+// richer package record is kept and weak placeholders are suppressed.
+func TestGenerateHumanComponentIndexMergesWeakDuplicatePlaceholders(t *testing.T) {
+	t.Parallel()
+
+	data := makeTestReportData()
+	data.BOM = &cdx.BOM{Components: &[]cdx.Component{
+		{
+			BOMRef:     "extract-sbom:GOOD_JANINO",
+			Type:       cdx.ComponentTypeLibrary,
+			Name:       "janino",
+			Version:    "3.1.10",
+			PackageURL: "pkg:maven/org.codehaus.janino/janino@3.1.10",
+			Properties: &[]cdx.Property{
+				{Name: "extract-sbom:delivery-path", Value: "delivery.zip/plugins/janino-3.1.10.jar"},
+				{Name: "extract-sbom:evidence-path", Value: "delivery.zip/plugins/janino-3.1.10.jar/META-INF/MANIFEST.MF"},
+				{Name: "syft:package:foundBy", Value: "java-archive-cataloger"},
+			},
+		},
+		{
+			BOMRef: "extract-sbom:WEAK_JANINO",
+			Type:   cdx.ComponentTypeLibrary,
+			Name:   "janino-3.1.10.jar",
+			Properties: &[]cdx.Property{
+				{Name: "extract-sbom:delivery-path", Value: "delivery.zip/plugins/janino-3.1.10.jar"},
+				{Name: "extract-sbom:evidence-path", Value: "delivery.zip/plugins/janino-3.1.10.jar/META-INF/MANIFEST.MF"},
+			},
+		},
+	}}
+
+	var buf bytes.Buffer
+	if err := GenerateHuman(data, "en", &buf); err != nil {
+		t.Fatalf("GenerateHuman error: %v", err)
+	}
+	output := buf.String()
+
+	if !strings.Contains(output, "### extract-sbom:GOOD_JANINO") {
+		t.Fatal("rich janino record missing from component index")
+	}
+	if strings.Contains(output, "### extract-sbom:WEAK_JANINO") {
+		t.Fatal("weak duplicate placeholder should be merged away")
 	}
 }
 

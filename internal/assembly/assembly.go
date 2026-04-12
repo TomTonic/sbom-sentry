@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -30,6 +31,14 @@ type bomRefAssigner struct {
 	byKey   map[string]string
 	byRef   map[string]string
 	makeRef func(string, int) string
+}
+
+type scanComponentCandidate struct {
+	component    cdx.Component
+	deliveryPath string
+	evidence     []string
+	foundBy      string
+	order        int
 }
 
 func newBOMRefAssigner(tree *extract.ExtractionNode, scanMap map[string]*scan.ScanResult) *bomRefAssigner {
@@ -90,12 +99,9 @@ func collectBOMRefKeys(tree *extract.ExtractionNode, scanMap map[string]*scan.Sc
 
 		seen[node.Path] = struct{}{}
 		if sr, ok := scanMap[node.Path]; ok && sr != nil && sr.Error == nil && sr.BOM != nil && sr.BOM.Components != nil {
-			for i := range *sr.BOM.Components {
-				comp := (*sr.BOM.Components)[i]
-				if isFileCatalogerArtifact(comp) {
-					continue
-				}
-				seen[componentRefKey(node.Path, comp, i)] = struct{}{}
+			candidates := normalizeScanComponents(node, sr)
+			for i := range candidates {
+				seen[componentRefKey(node.Path, candidates[i].component, i)] = struct{}{}
 			}
 		}
 
@@ -145,6 +151,235 @@ func syftLocationPath(comp cdx.Component) string {
 	}
 	for _, prop := range *comp.Properties {
 		if prop.Name == "syft:location:0:path" {
+			return prop.Value
+		}
+	}
+	return ""
+}
+
+func normalizeScanComponents(node *extract.ExtractionNode, sr *scan.ScanResult) []scanComponentCandidate {
+	if node == nil || sr == nil || sr.BOM == nil || sr.BOM.Components == nil {
+		return nil
+	}
+
+	candidates := make([]scanComponentCandidate, 0, len(*sr.BOM.Components))
+	for i := range *sr.BOM.Components {
+		comp := (*sr.BOM.Components)[i]
+		if isFileCatalogerArtifact(comp) {
+			continue
+		}
+
+		foundBy := firstComponentPropertyValue(comp, "syft:package:foundBy")
+		if isLowValueFileArtifact(comp, foundBy) {
+			continue
+		}
+
+		deliveryPath := node.Path
+		if node.Status == extract.StatusExtracted {
+			if loc := syftLocationPath(comp); loc != "" {
+				deliveryPath = node.Path + "/" + strings.TrimPrefix(loc, "/")
+			}
+		}
+
+		evidence := append([]string(nil), sr.EvidencePaths[comp.BOMRef]...)
+		sort.Strings(evidence)
+
+		candidates = append(candidates, scanComponentCandidate{
+			component:    comp,
+			deliveryPath: deliveryPath,
+			evidence:     evidence,
+			foundBy:      foundBy,
+			order:        i,
+		})
+	}
+
+	candidates = mergeDuplicateScanCandidates(candidates)
+
+	sort.Slice(candidates, func(i, j int) bool {
+		return compareScanCandidates(candidates[i], candidates[j]) < 0
+	})
+
+	return candidates
+}
+
+func mergeDuplicateScanCandidates(candidates []scanComponentCandidate) []scanComponentCandidate {
+	if len(candidates) < 2 {
+		return candidates
+	}
+
+	groups := make(map[string][]scanComponentCandidate)
+	keys := make([]string, 0)
+	for i := range candidates {
+		key := scanCandidateLocusKey(candidates[i])
+		if _, ok := groups[key]; !ok {
+			keys = append(keys, key)
+		}
+		groups[key] = append(groups[key], candidates[i])
+	}
+	sort.Strings(keys)
+
+	merged := make([]scanComponentCandidate, 0, len(candidates))
+	for _, key := range keys {
+		group := groups[key]
+		if len(group) == 1 {
+			merged = append(merged, group[0])
+			continue
+		}
+
+		best := pickBestScanCandidate(group)
+		if shouldCollapseScanCandidateGroup(group, best) {
+			merged = append(merged, best)
+			continue
+		}
+
+		merged = append(merged, group...)
+	}
+
+	return merged
+}
+
+func scanCandidateLocusKey(candidate scanComponentCandidate) string {
+	return candidate.deliveryPath + "\x00" + strings.Join(candidate.evidence, "\x1f")
+}
+
+func pickBestScanCandidate(group []scanComponentCandidate) scanComponentCandidate {
+	best := group[0]
+	bestScore := scanCandidateQualityScore(best)
+	for i := 1; i < len(group); i++ {
+		score := scanCandidateQualityScore(group[i])
+		if score > bestScore || (score == bestScore && compareScanCandidates(group[i], best) < 0) {
+			best = group[i]
+			bestScore = score
+		}
+	}
+	return best
+}
+
+func compareScanCandidates(a, b scanComponentCandidate) int {
+	if a.deliveryPath != b.deliveryPath {
+		if a.deliveryPath < b.deliveryPath {
+			return -1
+		}
+		return 1
+	}
+	aEvidence := ""
+	if len(a.evidence) > 0 {
+		aEvidence = a.evidence[0]
+	}
+	bEvidence := ""
+	if len(b.evidence) > 0 {
+		bEvidence = b.evidence[0]
+	}
+	if aEvidence != bEvidence {
+		if aEvidence < bEvidence {
+			return -1
+		}
+		return 1
+	}
+	if a.component.Name != b.component.Name {
+		if a.component.Name < b.component.Name {
+			return -1
+		}
+		return 1
+	}
+	if a.component.Version != b.component.Version {
+		if a.component.Version < b.component.Version {
+			return -1
+		}
+		return 1
+	}
+	if a.component.PackageURL != b.component.PackageURL {
+		if a.component.PackageURL < b.component.PackageURL {
+			return -1
+		}
+		return 1
+	}
+	if a.foundBy != b.foundBy {
+		if a.foundBy < b.foundBy {
+			return -1
+		}
+		return 1
+	}
+	if a.component.BOMRef != b.component.BOMRef {
+		if a.component.BOMRef < b.component.BOMRef {
+			return -1
+		}
+		return 1
+	}
+	if a.order < b.order {
+		return -1
+	}
+	if a.order > b.order {
+		return 1
+	}
+	return 0
+}
+
+func scanCandidateQualityScore(candidate scanComponentCandidate) int {
+	score := 0
+	if candidate.component.PackageURL != "" {
+		score += 4
+	}
+	if candidate.foundBy != "" {
+		score += 3
+	}
+	if candidate.component.Version != "" {
+		score += 2
+	}
+	if candidate.component.Name != "" && !strings.Contains(candidate.component.Name, "/") {
+		score++
+	}
+	return score
+}
+
+func shouldCollapseScanCandidateGroup(group []scanComponentCandidate, best scanComponentCandidate) bool {
+	if scanCandidateQualityScore(best) < 4 {
+		return false
+	}
+
+	for i := range group {
+		candidate := group[i]
+		if candidate.component.BOMRef == best.component.BOMRef && candidate.order == best.order {
+			continue
+		}
+		if !isWeakScanCandidate(candidate) {
+			return false
+		}
+	}
+
+	return true
+}
+
+func isWeakScanCandidate(candidate scanComponentCandidate) bool {
+	if candidate.component.PackageURL != "" || candidate.foundBy != "" || candidate.component.Version != "" {
+		return false
+	}
+	name := candidate.component.Name
+	if name == "" {
+		return true
+	}
+	if strings.Contains(name, "/") {
+		return true
+	}
+
+	base := path.Base(candidate.deliveryPath)
+	baseNoExt := strings.TrimSuffix(base, path.Ext(base))
+	return strings.EqualFold(name, base) || strings.EqualFold(name, baseNoExt)
+}
+
+func isLowValueFileArtifact(comp cdx.Component, foundBy string) bool {
+	if comp.Type != cdx.ComponentTypeFile {
+		return false
+	}
+	return comp.PackageURL == "" && comp.Version == "" && foundBy == ""
+}
+
+func firstComponentPropertyValue(comp cdx.Component, name string) string {
+	if comp.Properties == nil {
+		return ""
+	}
+	for _, prop := range *comp.Properties {
+		if prop.Name == name && prop.Value != "" {
 			return prop.Value
 		}
 	}
@@ -408,53 +643,31 @@ func processNode(node *extract.ExtractionNode, components *[]cdx.Component, depe
 
 	// Merge scan results.
 	if sr, ok := scanMap[node.Path]; ok && sr.Error == nil && sr.BOM != nil {
-		if sr.BOM.Components != nil {
-			for i := range *sr.BOM.Components {
-				comp := (*sr.BOM.Components)[i]
+		candidates := normalizeScanComponents(node, sr)
+		for i := range candidates {
+			comp := candidates[i].component
+			comp.BOMRef = refAssigner.RefForComponent(node.Path, comp, i)
 
-				// Skip file-cataloger artifacts: file-type components with
-				// absolute paths as names are Syft's file cataloger entries
-				// for temp extraction directories. The same file is properly
-				// identified by content-aware catalogers (java-archive, etc.).
-				if isFileCatalogerArtifact(comp) {
-					continue
-				}
-
-				originalRef := comp.BOMRef
-				comp.BOMRef = refAssigner.RefForComponent(node.Path, comp, i)
-
-				// Derive delivery path. For extracted-directory scans,
-				// refine using syft:location:0:path when available so the
-				// delivery path points at the specific archive inside the
-				// container rather than just the container itself.
-				deliveryPath := node.Path
-				if node.Status == extract.StatusExtracted {
-					if loc := syftLocationPath(comp); loc != "" {
-						deliveryPath = node.Path + "/" + strings.TrimPrefix(loc, "/")
-					}
-				}
-
-				props := []cdx.Property{
-					{Name: "extract-sbom:delivery-path", Value: deliveryPath},
-				}
-				for _, evidencePath := range sr.EvidencePaths[originalRef] {
-					props = append(props, cdx.Property{Name: "extract-sbom:evidence-path", Value: evidencePath})
-				}
-				if comp.Properties != nil {
-					props = append(props, *comp.Properties...)
-				}
-				props = uniqueSortedProperties(props)
-				comp.Properties = &props
-
-				*components = append(*components, comp)
-
-				// Add to node's dependency list.
-				if nodeDep.Dependencies == nil {
-					deps := make([]string, 0)
-					nodeDep.Dependencies = &deps
-				}
-				*nodeDep.Dependencies = append(*nodeDep.Dependencies, comp.BOMRef)
+			props := []cdx.Property{
+				{Name: "extract-sbom:delivery-path", Value: candidates[i].deliveryPath},
 			}
+			for _, evidencePath := range candidates[i].evidence {
+				props = append(props, cdx.Property{Name: "extract-sbom:evidence-path", Value: evidencePath})
+			}
+			if comp.Properties != nil {
+				props = append(props, *comp.Properties...)
+			}
+			props = uniqueSortedProperties(props)
+			comp.Properties = &props
+
+			*components = append(*components, comp)
+
+			// Add to node's dependency list.
+			if nodeDep.Dependencies == nil {
+				deps := make([]string, 0)
+				nodeDep.Dependencies = &deps
+			}
+			*nodeDep.Dependencies = append(*nodeDep.Dependencies, comp.BOMRef)
 		}
 	} else if sr, ok := scanMap[node.Path]; ok && sr.Error != nil {
 		compositionAggregate = cdx.CompositionAggregateUnknown
