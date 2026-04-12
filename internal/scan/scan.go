@@ -175,7 +175,7 @@ func (tracker *scanProgressTracker) markCompleted(cfg config.Config, total int) 
 }
 
 func shouldLogScanStart(label string) bool {
-	return label != "scan-native"
+	return false // Suppress start logs for all scan types
 }
 
 func shouldLogScanCompletion(label string, duration time.Duration) bool {
