@@ -31,6 +31,8 @@ import (
 	"github.com/TomTonic/extract-sbom/internal/sandbox"
 )
 
+const extractionProgressInterval = 2 * time.Second
+
 // ExtractionStatus represents the outcome of processing an extraction node.
 type ExtractionStatus int
 
@@ -137,8 +139,6 @@ func Extract(ctx context.Context, inputPath string, cfg config.Config, sb sandbo
 // extractRecursive handles one level of extraction and recurses into children.
 func extractRecursive(ctx context.Context, node *ExtractionNode, filePath string, deliveryPath string,
 	depth int, cfg config.Config, sb sandbox.Sandbox, stats *safeguard.ExtractionStats) error {
-	cfg.EmitProgress(config.ProgressVerbose, "[extract] depth=%d path=%s", depth, deliveryPath)
-
 	// Check depth limit.
 	if depth > cfg.Limits.MaxDepth {
 		node.Status = StatusSkipped
@@ -177,7 +177,6 @@ func extractRecursive(ctx context.Context, node *ExtractionNode, filePath string
 
 	// Extract based on format.
 	start := time.Now()
-	cfg.EmitProgress(config.ProgressVerbose, "[extract] start: %s (%s)", deliveryPath, info.Format.String())
 
 	// Apply per-extraction timeout from configuration.
 	extractCtx := ctx
@@ -253,8 +252,6 @@ func extractRecursive(ctx context.Context, node *ExtractionNode, filePath string
 		}
 		return nil
 	}
-
-	cfg.EmitProgress(config.ProgressVerbose, "[extract] done: %s in %s (%s)", deliveryPath, node.Duration.Round(time.Millisecond), node.Status.String())
 
 	// Recurse into extracted contents.
 	if node.ExtractedDir != "" {
@@ -346,7 +343,7 @@ func extractZIP(ctx context.Context, node *ExtractionNode, filePath string, work
 
 	node.Tool = "archive/zip"
 	sanitizedNames := 0
-	nextProgress := time.Now().Add(5 * time.Second)
+	nextProgress := time.Now().Add(extractionProgressInterval)
 
 	for _, f := range r.File {
 		select {
@@ -405,8 +402,8 @@ func extractZIP(ctx context.Context, node *ExtractionNode, filePath string, work
 
 		if time.Now().After(nextProgress) {
 			totalGiB := float64(node.TotalSize) / (1024.0 * 1024.0 * 1024.0)
-			cfg.EmitProgress(config.ProgressNormal, "[extract] %s: %d entries, %.2f GiB unpacked", node.Path, node.EntriesCount, totalGiB)
-			nextProgress = time.Now().Add(5 * time.Second)
+			cfg.EmitProgress(config.ProgressNormal, "[extract] %s: %d files extracted, %.2f GiB unpacked", node.Path, node.EntriesCount, totalGiB)
+			nextProgress = time.Now().Add(extractionProgressInterval)
 		}
 	}
 
@@ -496,7 +493,7 @@ func extractTAR(ctx context.Context, node *ExtractionNode, filePath string, read
 	}()
 
 	node.Tool = "archive/tar"
-	nextProgress := time.Now().Add(5 * time.Second)
+	nextProgress := time.Now().Add(extractionProgressInterval)
 
 	tr := tar.NewReader(reader)
 
@@ -551,8 +548,8 @@ func extractTAR(ctx context.Context, node *ExtractionNode, filePath string, read
 			node.TotalSize += hdr.Size
 			if time.Now().After(nextProgress) {
 				totalGiB := float64(node.TotalSize) / (1024.0 * 1024.0 * 1024.0)
-				cfg.EmitProgress(config.ProgressNormal, "[extract] %s: %d entries, %.2f GiB unpacked", node.Path, node.EntriesCount, totalGiB)
-				nextProgress = time.Now().Add(5 * time.Second)
+				cfg.EmitProgress(config.ProgressNormal, "[extract] %s: %d files extracted, %.2f GiB unpacked", node.Path, node.EntriesCount, totalGiB)
+				nextProgress = time.Now().Add(extractionProgressInterval)
 			}
 		default:
 			// Skip other types (symlinks are rejected by safeguard).

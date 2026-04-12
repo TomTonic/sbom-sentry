@@ -217,8 +217,8 @@ Output format for the audit report.
 Controls runtime progress output on stderr.
 
 - `quiet`: no progress output (only final paths/errors)
-- `normal`: stage markers and periodic keep-alive updates for long extraction/scan phases
-- `verbose`: detailed per-container and per-scan-target progress
+- `normal`: stage markers, periodic extraction counters, aggregated native-scan completion updates, and keep-alive output for genuinely long scan tasks
+- `verbose`: everything from `normal`, plus detailed extracted-directory scan progress and slow or failing native-file scans; short native scans are intentionally coalesced to keep logs readable
 
 Examples:
 
@@ -232,6 +232,9 @@ extract-sbom --progress verbose ...
 # Silent mode for wrappers that provide their own progress UI
 extract-sbom --progress quiet ...
 ```
+
+For the end-to-end processing model behind these progress messages, see
+[SCAN_APPROACH.md](SCAN_APPROACH.md).
 
 **`--language en|de` (default: en)**
 

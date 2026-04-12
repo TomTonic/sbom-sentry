@@ -23,7 +23,10 @@ import (
 
 	cdx "github.com/CycloneDX/cyclonedx-go"
 	"github.com/anchore/syft/syft"
+	syftfile "github.com/anchore/syft/syft/file"
 	"github.com/anchore/syft/syft/format/cyclonedxjson"
+	syftpkg "github.com/anchore/syft/syft/pkg"
+	syftsbom "github.com/anchore/syft/syft/sbom"
 
 	// Register a pure-Go SQLite driver required by Syft's RPM catalogers.
 	_ "github.com/glebarez/go-sqlite"
@@ -39,6 +42,7 @@ type ScanResult struct { //nolint:revive // stuttering is acceptable for clarity
 	BOM           *cdx.BOM            // CycloneDX BOM for this subtree/file
 	EvidencePaths map[string][]string // optional component BOMRef -> supporting internal paths
 	Error         error               // non-nil if scanning failed
+	syftPackages  []syftpkg.Package
 }
 
 // Version is the extract-sbom version string, set at build time.
@@ -47,6 +51,10 @@ var Version = "dev"
 // ScanAll walks the extraction tree and invokes Syft on each scannable node.
 // SyftNative leaves are scanned using the original file path; extracted
 // directories are scanned at their extraction output path.
+//
+// To reduce redundant work, extracted directories are scanned first. Packages
+// discovered inside Syft-native child files are then reassigned to those child
+// nodes, allowing many per-file Syft invocations to be skipped entirely.
 //
 // Scanning is parallelized across multiple workers (controlled by cfg.ParallelScanners).
 // Results are maintained in the same order as the extraction tree walk.
@@ -72,23 +80,127 @@ func ScanAll(ctx context.Context, root *extract.ExtractionNode, cfg config.Confi
 		numWorkers = 1
 	}
 
-	cfg.EmitProgress(config.ProgressNormal, "[scan] starting %d scan workers for %d targets", numWorkers, len(results))
+	extractedIndices, nativeIndices := partitionScanTargets(root, results)
+	cfg.EmitProgress(
+		config.ProgressNormal,
+		"[scan] starting %d scan workers for %d targets (%d extracted, %d syft-native)",
+		numWorkers,
+		len(results),
+		len(extractedIndices),
+		len(nativeIndices),
+	)
 
-	// Create a work queue for scan indices.
-	workQueue := make(chan int, len(results))
+	if len(extractedIndices) > 0 {
+		parallelScanIndices(ctx, root, results, extractedIndices, numWorkers, cfg, "scan-extracted")
+	}
+
+	directNativeIndices := nativeIndices
+	if len(extractedIndices) > 0 && len(nativeIndices) > 0 {
+		reusedCount, unresolvedNativeIndices, err := reuseSyftNativeResultsFromExtractedScans(root, results, extractedIndices, nativeIndices)
+		if err != nil {
+			cfg.EmitProgress(config.ProgressNormal, "[scan] reuse of extracted directory results disabled: %v", err)
+		} else {
+			directNativeIndices = unresolvedNativeIndices
+			if reusedCount > 0 {
+				cfg.EmitProgress(config.ProgressNormal, "[scan] reused %d syft-native targets from extracted directory scans", reusedCount)
+			}
+		}
+	}
+
+	if len(directNativeIndices) > 0 {
+		parallelScanIndices(ctx, root, results, directNativeIndices, numWorkers, cfg, "scan-native")
+	}
+
+	return results, nil
+}
+
+func partitionScanTargets(root *extract.ExtractionNode, results []ScanResult) (extractedIndices []int, nativeIndices []int) {
+	for idx := range results {
+		node := findNode(root, results[idx].NodePath)
+		if node == nil {
+			continue
+		}
+
+		switch node.Status {
+		case extract.StatusExtracted:
+			extractedIndices = append(extractedIndices, idx)
+		case extract.StatusSyftNative:
+			nativeIndices = append(nativeIndices, idx)
+		}
+	}
+
+	return extractedIndices, nativeIndices
+}
+
+type scanTask struct {
+	resultIndex int
+	ordinal     int
+}
+
+const (
+	scanNativeProgressInterval         = 2 * time.Second
+	scanNativeVerboseCompletionMinimum = 2 * time.Second
+)
+
+type scanProgressTracker struct {
+	mu         sync.Mutex
+	completed  int
+	nextUpdate time.Time
+}
+
+func newScanProgressTracker(label string) *scanProgressTracker {
+	if label != "scan-native" {
+		return nil
+	}
+
+	return &scanProgressTracker{nextUpdate: time.Now().Add(scanNativeProgressInterval)}
+}
+
+func (tracker *scanProgressTracker) markCompleted(cfg config.Config, total int) {
+	if tracker == nil || total < 1 {
+		return
+	}
+
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+
+	tracker.completed++
+	now := time.Now()
+	if tracker.completed < total && now.Before(tracker.nextUpdate) {
+		return
+	}
+
+	cfg.EmitProgress(config.ProgressNormal, "[scan-native] completed %d/%d targets", tracker.completed, total)
+	tracker.nextUpdate = now.Add(scanNativeProgressInterval)
+}
+
+func shouldLogScanStart(label string) bool {
+	return label != "scan-native"
+}
+
+func shouldLogScanCompletion(label string, duration time.Duration) bool {
+	return label != "scan-native" || duration >= scanNativeVerboseCompletionMinimum
+}
+
+func parallelScanIndices(ctx context.Context, root *extract.ExtractionNode, results []ScanResult, indices []int, numWorkers int, cfg config.Config, label string) {
+	workQueue := make(chan scanTask, len(indices))
 	var wg sync.WaitGroup
+	progressTracker := newScanProgressTracker(label)
 
-	// Spawn worker goroutines.
-	for w := 0; w < numWorkers; w++ {
+	for worker := 0; worker < numWorkers; worker++ {
 		wg.Add(1)
-		go func(_ int) {
+		go func() {
 			defer wg.Done()
-			for idx := range workQueue {
-				cfg.EmitProgress(config.ProgressVerbose, "[scan %d/%d] start: %s", idx+1, len(results), results[idx].NodePath)
+			for task := range workQueue {
+				nodePath := results[task.resultIndex].NodePath
+				if shouldLogScanStart(label) {
+					cfg.EmitProgress(config.ProgressVerbose, "[%s %d/%d] start: %s", label, task.ordinal, len(indices), nodePath)
+				}
+
 				start := time.Now()
 				done := make(chan struct{})
 				if cfg.ProgressLevel >= config.ProgressNormal {
-					go func(idx int, total int, nodePath string) {
+					go func(ordinal int, total int, currentNodePath string) {
 						ticker := time.NewTicker(15 * time.Second)
 						defer ticker.Stop()
 						for {
@@ -96,39 +208,173 @@ func ScanAll(ctx context.Context, root *extract.ExtractionNode, cfg config.Confi
 							case <-done:
 								return
 							case <-ticker.C:
-								cfg.EmitProgress(config.ProgressNormal, "[scan %d/%d] still running: %s", idx+1, total, nodePath)
+								cfg.EmitProgress(config.ProgressNormal, "[%s %d/%d] still running: %s", label, ordinal, total, currentNodePath)
 							}
 						}
-					}(idx+1, len(results), results[idx].NodePath)
+					}(task.ordinal, len(indices), nodePath)
 				}
-				scanNode(ctx, &results[idx], root)
+
+				scanNode(ctx, &results[task.resultIndex], root)
 				close(done)
 
 				duration := time.Since(start).Round(time.Millisecond)
-				if results[idx].Error != nil {
-					cfg.EmitProgress(config.ProgressNormal, "[scan %d/%d] failed after %s: %s (%v)", idx+1, len(results), duration, results[idx].NodePath, results[idx].Error)
+				progressTracker.markCompleted(cfg, len(indices))
+				if results[task.resultIndex].Error != nil {
+					cfg.EmitProgress(config.ProgressNormal, "[%s %d/%d] failed after %s: %s (%v)", label, task.ordinal, len(indices), duration, nodePath, results[task.resultIndex].Error)
 					continue
 				}
 
 				componentCount := 0
-				if results[idx].BOM != nil && results[idx].BOM.Components != nil {
-					componentCount = len(*results[idx].BOM.Components)
+				if results[task.resultIndex].BOM != nil && results[task.resultIndex].BOM.Components != nil {
+					componentCount = len(*results[task.resultIndex].BOM.Components)
 				}
-				cfg.EmitProgress(config.ProgressVerbose, "[scan %d/%d] done in %s: %s (%d components)", idx+1, len(results), duration, results[idx].NodePath, componentCount)
+				if shouldLogScanCompletion(label, duration) {
+					cfg.EmitProgress(config.ProgressVerbose, "[%s %d/%d] done in %s: %s (%d components)", label, task.ordinal, len(indices), duration, nodePath, componentCount)
+				}
 			}
-		}(w)
+		}()
 	}
 
-	// Queue all scan indices.
-	for i := 0; i < len(results); i++ {
-		workQueue <- i
+	for ordinal, idx := range indices {
+		workQueue <- scanTask{resultIndex: idx, ordinal: ordinal + 1}
 	}
 	close(workQueue)
 
-	// Wait for all workers to finish.
 	wg.Wait()
+}
 
-	return results, nil
+func reuseSyftNativeResultsFromExtractedScans(root *extract.ExtractionNode, results []ScanResult, extractedIndices []int, nativeIndices []int) (int, []int, error) {
+	packagesByNativeNode := make(map[string][]syftpkg.Package)
+
+	for _, idx := range extractedIndices {
+		if results[idx].Error != nil || len(results[idx].syftPackages) == 0 {
+			continue
+		}
+
+		node := findNode(root, results[idx].NodePath)
+		if node == nil {
+			continue
+		}
+
+		descendantNativeNodes := collectDescendantSyftNativeNodes(node)
+		if len(descendantNativeNodes) == 0 {
+			continue
+		}
+
+		assignedPackagesByNode := make(map[string][]syftpkg.Package)
+		remainingPackages := make([]syftpkg.Package, 0, len(results[idx].syftPackages))
+		for _, pkg := range results[idx].syftPackages {
+			ownerPath := matchPackageToSyftNativeNode(pkg, descendantNativeNodes)
+			if ownerPath == "" {
+				remainingPackages = append(remainingPackages, pkg)
+				continue
+			}
+
+			assignedPackagesByNode[ownerPath] = append(assignedPackagesByNode[ownerPath], pkg)
+		}
+
+		if len(assignedPackagesByNode) == 0 {
+			continue
+		}
+
+		filteredBOM, err := buildBOMFromPackages(remainingPackages)
+		if err != nil {
+			return 0, nativeIndices, fmt.Errorf("filter extracted scan %s: %w", node.Path, err)
+		}
+
+		results[idx].BOM = filteredBOM
+		results[idx].syftPackages = remainingPackages
+
+		for ownerPath, pkgs := range assignedPackagesByNode {
+			packagesByNativeNode[ownerPath] = append(packagesByNativeNode[ownerPath], pkgs...)
+		}
+	}
+
+	reusedCount := 0
+	unresolved := make([]int, 0, len(nativeIndices))
+	for _, idx := range nativeIndices {
+		node := findNode(root, results[idx].NodePath)
+		if node == nil {
+			unresolved = append(unresolved, idx)
+			continue
+		}
+
+		pkgs := packagesByNativeNode[node.Path]
+		if len(pkgs) == 0 {
+			unresolved = append(unresolved, idx)
+			continue
+		}
+
+		bom, err := buildBOMFromPackages(pkgs)
+		if err != nil {
+			unresolved = append(unresolved, idx)
+			continue
+		}
+
+		results[idx].BOM = bom
+		results[idx].Error = nil
+		results[idx].EvidencePaths = collectEvidencePaths(node, node.OriginalPath, bom)
+		results[idx].syftPackages = pkgs
+		reusedCount++
+	}
+
+	return reusedCount, unresolved, nil
+}
+
+func collectDescendantSyftNativeNodes(node *extract.ExtractionNode) []*extract.ExtractionNode {
+	if node == nil {
+		return nil
+	}
+
+	var descendants []*extract.ExtractionNode
+	for _, child := range node.Children {
+		if child.Status == extract.StatusSyftNative {
+			descendants = append(descendants, child)
+		}
+		descendants = append(descendants, collectDescendantSyftNativeNodes(child)...)
+	}
+
+	return descendants
+}
+
+func matchPackageToSyftNativeNode(pkg syftpkg.Package, nodes []*extract.ExtractionNode) string {
+	bestMatch := ""
+	bestMatchLength := -1
+
+	for _, location := range pkg.Locations.ToSlice() {
+		for _, node := range nodes {
+			if node == nil || node.OriginalPath == "" {
+				continue
+			}
+
+			if !locationMatchesTarget(location, node.OriginalPath) {
+				continue
+			}
+
+			if len(node.OriginalPath) > bestMatchLength {
+				bestMatch = node.Path
+				bestMatchLength = len(node.OriginalPath)
+			}
+		}
+	}
+
+	return bestMatch
+}
+
+func locationMatchesTarget(location syftfile.Location, target string) bool {
+	return pathMatchesScanTarget(location.RealPath, target) || pathMatchesScanTarget(location.AccessPath, target)
+}
+
+func pathMatchesScanTarget(locationPath string, target string) bool {
+	if locationPath == "" || target == "" {
+		return false
+	}
+
+	if locationPath == target {
+		return true
+	}
+
+	return strings.HasPrefix(locationPath, target+":") || strings.HasPrefix(locationPath, target+"!") || strings.HasPrefix(locationPath, target+"/")
 }
 
 // collectScanTargets walks the extraction tree and identifies nodes that
@@ -189,6 +435,11 @@ func scanNode(ctx context.Context, result *ScanResult, root *extract.ExtractionN
 		return
 	}
 
+	result.BOM = nil
+	result.EvidencePaths = nil
+	result.Error = nil
+	result.syftPackages = nil
+
 	// Create Syft source.
 	src, err := syft.GetSource(ctx, target, nil)
 	if err != nil {
@@ -204,33 +455,59 @@ func scanNode(ctx context.Context, result *ScanResult, root *extract.ExtractionN
 		return
 	}
 
-	// Encode Syft's internal SBOM to CycloneDX JSON.
-	encoder, err := cyclonedxjson.NewFormatEncoderWithConfig(cyclonedxjson.DefaultEncoderConfig())
+	bom, err := convertSyftSBOMToCycloneDX(syftSBOM)
 	if err != nil {
-		result.Error = fmt.Errorf("scan: create CycloneDX encoder: %w", err)
+		result.Error = fmt.Errorf("scan: convert Syft SBOM to CycloneDX for %s: %w", target, err)
 		return
 	}
 
-	var buf bytes.Buffer
-	if err := encoder.Encode(&buf, *syftSBOM); err != nil {
-		result.Error = fmt.Errorf("scan: encode SBOM to CycloneDX JSON for %s: %w", target, err)
-		return
-	}
-
-	// Decode CycloneDX JSON into cyclonedx-go types.
-	bom := new(cdx.BOM)
-	decoder := cdx.NewBOMDecoder(bytes.NewReader(buf.Bytes()), cdx.BOMFileFormatJSON)
-	if err := decoder.Decode(bom); err != nil {
-		// Try plain JSON decode as fallback.
-		bom = new(cdx.BOM)
-		if jerr := json.Unmarshal(buf.Bytes(), bom); jerr != nil {
-			result.Error = fmt.Errorf("scan: decode CycloneDX BOM for %s: %w (json fallback: %v)", target, err, jerr)
-			return
-		}
+	if syftSBOM.Artifacts.Packages != nil {
+		result.syftPackages = syftSBOM.Artifacts.Packages.Sorted()
 	}
 
 	result.BOM = bom
 	result.EvidencePaths = collectEvidencePaths(node, target, bom)
+}
+
+func buildBOMFromPackages(packages []syftpkg.Package) (*cdx.BOM, error) {
+	if len(packages) == 0 {
+		return nil, nil
+	}
+
+	syftBOM := &syftsbom.SBOM{
+		Artifacts: syftsbom.Artifacts{
+			Packages: syftpkg.NewCollection(packages...),
+		},
+	}
+
+	return convertSyftSBOMToCycloneDX(syftBOM)
+}
+
+func convertSyftSBOMToCycloneDX(syftBOM *syftsbom.SBOM) (*cdx.BOM, error) {
+	if syftBOM == nil {
+		return nil, nil
+	}
+
+	encoder, err := cyclonedxjson.NewFormatEncoderWithConfig(cyclonedxjson.DefaultEncoderConfig())
+	if err != nil {
+		return nil, fmt.Errorf("create CycloneDX encoder: %w", err)
+	}
+
+	var buf bytes.Buffer
+	if err := encoder.Encode(&buf, *syftBOM); err != nil {
+		return nil, fmt.Errorf("encode SBOM to CycloneDX JSON: %w", err)
+	}
+
+	bom := new(cdx.BOM)
+	decoder := cdx.NewBOMDecoder(bytes.NewReader(buf.Bytes()), cdx.BOMFileFormatJSON)
+	if err := decoder.Decode(bom); err != nil {
+		bom = new(cdx.BOM)
+		if jerr := json.Unmarshal(buf.Bytes(), bom); jerr != nil {
+			return nil, fmt.Errorf("decode CycloneDX BOM: %w (json fallback: %v)", err, jerr)
+		}
+	}
+
+	return bom, nil
 }
 
 // collectEvidencePaths derives optional, deterministic evidence pointers for

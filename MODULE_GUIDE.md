@@ -542,38 +542,49 @@ For each file encountered:
 
 ### 3.7 `internal/scan`
 
-**Purpose:** Invoke Syft in library mode to catalog software components.
+**Purpose:** Invoke Syft in library mode to catalog software components while
+avoiding redundant direct scans wherever Syft has already produced explicit,
+reusable package locations.
+
 Operates on two distinct node types produced by the extract module:
 
 1. **SyftNative leaves** — Syft is pointed at the *original file* (e.g. a JAR).
 2. **Extracted directories** — Syft is pointed at the *extraction output directory*.
 
+For a reader-oriented explanation of the same logic, see
+[SCAN_APPROACH.md](SCAN_APPROACH.md).
+
 **Interface:**
 ```go
 type ScanResult struct {
-    NodePath string        // matches ExtractionNode.Path
-    SBOM     *cyclonedx.BOM // CycloneDX BOM for this subtree
-    Error    error
+    NodePath      string
+    BOM           *cdx.BOM
+    EvidencePaths map[string][]string
+    Error         error
 }
 
-// ScanAll walks the extraction tree and invokes Syft on each scannable node.
 func ScanAll(ctx context.Context, root *extract.ExtractionNode, cfg config.Config) ([]ScanResult, error)
+
+func FlattenEvidencePaths(result ScanResult) []string
 ```
 
-**Internal flow per node:**
+**Current scan flow:**
 ```go
-// For SyftNative leaves: scan the original file
-// For extracted directories: scan the extraction output
-target := node.ExtractedDir
-if node.Status == extract.SyftNative {
-    target = node.Path // original file, not extracted
-}
-
-src, err := syft.GetSource(ctx, target, nil)
-syftSBOM, err := syft.CreateSBOM(ctx, src, syft.DefaultCreateSBOMConfig().
-    WithTool("extract-sbom", version))
-// Encode Syft's internal SBOM to CycloneDX JSON bytes
-// Decode with cyclonedx-go into *cyclonedx.BOM
+1. Walk the extraction tree and collect scannable nodes.
+2. Partition scan targets into:
+   - extracted directories
+   - Syft-native leaves
+3. Scan extracted directories first.
+4. Keep Syft's sorted package collection from those scans.
+5. For each extracted-directory result:
+   - compare each package location with descendant Syft-native child paths
+   - if the package clearly belongs to such a child, reassign it there
+   - keep only the remaining packages on the parent directory node
+6. Rebuild child and parent BOMs from those package sets.
+7. Directly scan only the Syft-native nodes that remain unresolved.
+8. Attach deterministic evidence paths where extract-sbom can name the
+   exact supporting artifact.
+9. Return per-node results to the assembly module.
 ```
 
 **Design decisions:**
@@ -581,10 +592,28 @@ syftSBOM, err := syft.CreateSBOM(ctx, src, syft.DefaultCreateSBOMConfig().
   Syft-first principle: Syft's own catalogers take precedence for formats
   they understand (JAR, RPM, DEB, etc.). extract-sbom only extracts "dumb"
   container formats where Syft needs the files to be laid out on disk.
+- Extracted directories are scanned before Syft-native child files so that
+  one broader scan can often provide reusable package evidence for many nested
+  native artifacts.
+- Package reassignment is conservative. extract-sbom only reuses packages when
+  Syft already reported a concrete package location that matches a descendant
+  Syft-native node. If that proof is missing, the native file is scanned
+  directly.
+- Matching uses explicit real-path and access-path comparisons. When more than
+  one child path matches, the most specific path wins. This keeps the behavior
+  deterministic and avoids broad fuzzy attribution.
+- Package collections are stored in sorted form before BOM rebuilding so that
+  reused results stay deterministic.
 - Syft's internal `sbom.SBOM` is serialized to CycloneDX JSON using
   Syft's own format encoder, then deserialized with `cyclonedx-go` to
   produce a standard `*cyclonedx.BOM`. This avoids coupling to Syft
   internals while preserving Syft's tested CycloneDX conversion.
+- For JAR-like native archives, the scan module can derive a precise manifest
+  evidence path and attach it as `extract-sbom:evidence-path` to support audit
+  explanations without changing package identity.
+- Runtime progress output is intentionally asymmetric: extracted-directory scans
+  can still log detailed work, while short native-file scans are aggregated so
+  large deliveries do not flood stderr with hundreds of low-value log lines.
 - Scan errors are captured per node, not fatal to the overall run.
   The policy module decides how to handle them.
 

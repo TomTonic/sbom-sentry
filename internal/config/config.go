@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -252,7 +253,7 @@ type Config struct {
 	Unsafe           bool
 	Limits           Limits
 	ProgressFn       ProgressReporter // optional runtime progress sink
-	ParallelScanners int              // number of concurrent Syft scan workers (default: 4)
+	ParallelScanners int              // number of concurrent Syft scan workers (default: GOMAXPROCS, capped at 16)
 }
 
 // DefaultConfig returns a Config with sensible defaults.
@@ -267,8 +268,19 @@ func DefaultConfig() Config {
 		Language:         "en",
 		WorkDir:          os.TempDir(),
 		Limits:           DefaultLimits(),
-		ParallelScanners: 4,
+		ParallelScanners: defaultParallelScanners(),
 	}
+}
+
+func defaultParallelScanners() int {
+	workers := runtime.GOMAXPROCS(0)
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > 16 {
+		workers = 16
+	}
+	return workers
 }
 
 // EmitProgress sends a progress update when the configured verbosity allows it.

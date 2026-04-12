@@ -10,6 +10,9 @@ It recursively processes nested containers and archive formats, applies safety
 limits, records extraction/scanning decisions, and keeps traceability via
 `extract-sbom:delivery-path` metadata.
 
+The concrete scan strategy, including determinism and trust boundaries, is
+explained in [SCAN_APPROACH.md](SCAN_APPROACH.md).
+
 ## Why This Project Exists
 
 Software procurement teams regularly receive deliveries from external vendors — ZIP
@@ -118,6 +121,7 @@ Typical outputs in `out/` (base name derived from input file):
 - [INSTALL.md](INSTALL.md): installation and dependency troubleshooting
 - [BUILD.md](BUILD.md): building from source and release tooling
 - [USAGE.md](USAGE.md): scenario-based usage, parameters, and outputs
+- [SCAN_APPROACH.md](SCAN_APPROACH.md): operator-focused explanation of how scanning works and why the result is trustworthy
 - [DESIGN.md](DESIGN.md): functional and security design
 - [MODULE_GUIDE.md](MODULE_GUIDE.md): module architecture and decisions
 
