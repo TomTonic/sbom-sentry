@@ -201,10 +201,11 @@ The assembly phase can therefore produce up to three components:
   those fields. This is the installed binary identity.
 - **`sign-plugin.ocx`** — same as above.
 
-`client.exe` and `sign-plugin.ocx` appear as sub-components of `client-setup.msi`
-in the SBOM. There is no conflict between MSI product metadata and PE
-`VERSIONINFO` fields: the MSI describes the product as a whole; the PE binaries
-describe individual installed components. The two sources are complementary.
+`client.exe` and `sign-plugin.ocx` appear as separate CycloneDX components
+linked as dependencies of `client-setup.msi` in the SBOM. There is no conflict
+between MSI product metadata and PE `VERSIONINFO` fields: the MSI describes the
+product as a whole; the PE binaries describe individual installed components.
+The two sources are complementary.
 
 ### 4.4 The Two `index.js` Files: What Syft Can And Cannot See
 
@@ -416,17 +417,24 @@ After scanning, `internal/assembly` walks the delivery tree depth-first and
 builds one CycloneDX BOM. Siblings are sorted before recursing; the walk order
 is therefore deterministic and independent of scan completion order.
 
-For every container node and every scan-target node, assembly creates one
-CycloneDX **component** and attaches:
+For every tracked node (every `extracted`, `syft-native`, `failed`,
+`security-blocked`, or `tool-missing` node that was persisted in the tree),
+assembly creates one CycloneDX **component** and attaches:
 
 - `extract-sbom:delivery-path` — the stable logical path inside the delivery
 - `extract-sbom:status` — the extraction status from Phase 1
-- The packages attributed to this node from Phase 2, each with their evidence
-  paths
-- For MSI nodes: `extract-sbom:msi-*` properties read from the Property table
+- The packages attributed to this node from Phase 2, each as a separate
+  CycloneDX component linked via a dependency relationship and with a BOMRef
+  namespaced under the owning node
+- For MSI nodes: `ProductName`, `ProductVersion`, and `Manufacturer` from the
+  MSI Property table are mapped to the standard CycloneDX component fields
+  `Name`, `Version`, and `Supplier`. `ProductCode`, `UpgradeCode`, and
+  `Language` become custom `extract-sbom:msi-*` properties.
 
-`skipped` leaf nodes such as plain files and PDFs appear in the audit report
-with their hash and status, but are not SBOM components.
+`skipped` leaf nodes such as plain files and PDFs are not persisted in the
+extraction tree. They are neither SBOM components nor audit-report entries.
+Their presence on disk is still covered by the parent directory scan — Syft
+encounters them when it scans the extraction directory.
 
 Here is what each node from the running example contributes:
 
@@ -443,7 +451,7 @@ Debian `control` file and records `libssl1.1 1.1.1n`.
 
 **`linux/apache-tomcat-9.0.98.tar.gz`** — one component. Packages found
 directly at the TAR root (not inside a nested archive) stay here. The four JAR
-and EAR nodes are sub-components of this TAR component.
+and EAR nodes are dependent components linked via CycloneDX dependencies.
 
 **`lib/catalina.jar`**, **`lib/tomcat-embed-core-9.0.98.jar`**,
 **`lib/servlet-api.jar`** — one component each. Their packages were attributed
@@ -457,12 +465,14 @@ if no more specific child node matches.
 **`linux/resources.tgz`** — one component. The scan found only `.properties`
 files; Syft recognized no package manifests. No packages attached.
 
-**`windows/client-setup.msi`** — one component. Assembly attaches
-`extract-sbom:msi-product-name`, `msi-product-version`, and `msi-manufacturer`
-from the MSI Property table as properties. If Syft found PE `VERSIONINFO` data
-for `client.exe` and `sign-plugin.ocx` while scanning the extracted MSI payload
-directory, those appear as packages under this component. If the supplier did
-not populate `VERSIONINFO`, nothing is attached for those binaries.
+**`windows/client-setup.msi`** — one component. Assembly maps `ProductName`,
+`ProductVersion`, and `Manufacturer` from the MSI Property table to the standard
+CycloneDX fields `Name`, `Version`, and `Supplier`. `ProductCode`, `UpgradeCode`,
+and `Language` become custom `extract-sbom:msi-*` properties. If Syft found PE
+`VERSIONINFO` data for `client.exe` and `sign-plugin.ocx` while scanning the
+extracted MSI payload directory, those appear as dependent components linked to
+this node. If the supplier did not populate `VERSIONINFO`, nothing is attached
+for those binaries.
 
 **`windows/prereqs/vcredist.cab`** — one component. Any PE binaries inside
 with populated `VERSIONINFO` become packages here.
@@ -475,8 +485,9 @@ what the InstallShield package bundles.
 This package is attached here with that `package.json` as evidence path. The
 bare `webapp/index.js` was not identified and generates no package record.
 
-**`docs/release-notes.pdf`** — `skipped`; recorded in the audit report with
-hash and status, but not an SBOM component.
+**`docs/release-notes.pdf`** — `skipped` leaf; not persisted in the tree, not
+an SBOM component. Syft still encounters the file when scanning the parent
+extraction directory, but finds no package manifest.
 
 ---
 
