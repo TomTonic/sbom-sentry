@@ -100,6 +100,26 @@ func Run(ctx context.Context, cfg config.Config) Result {
 	}
 	cfg.EmitProgress(config.ProgressNormal, "[extract-sbom] sandbox: %s (available=%t)", sandboxInfo.Name, sandboxInfo.Available)
 
+	// Check external tool availability early so users don't wait minutes
+	// before discovering that MSI/CAB/7z extraction will fail.
+	if !sb.Available() {
+		cfg.EmitProgress(config.ProgressNormal,
+			"[extract-sbom] WARNING: sandbox unavailable and --unsafe not set. "+
+				"Extraction of MSI, CAB, 7z, ISO, and InstallShield formats will be skipped. "+
+				"Pass --unsafe to allow unsandboxed extraction.")
+	} else {
+		if !extract.IsToolAvailable("7zz") {
+			cfg.EmitProgress(config.ProgressNormal,
+				"[extract-sbom] WARNING: 7zz not found on PATH. Extraction of MSI, CAB, 7z, and ISO archives will fail.")
+			addIssue("tool-availability", fmt.Errorf("7zz not found on PATH"))
+		}
+		if !extract.IsToolAvailable("unshield") {
+			cfg.EmitProgress(config.ProgressNormal,
+				"[extract-sbom] WARNING: unshield not found on PATH. InstallShield CAB extraction will fail.")
+			addIssue("tool-availability", fmt.Errorf("unshield not found on PATH"))
+		}
+	}
+
 	// Step 4: Extract.
 	cfg.EmitProgress(config.ProgressNormal, "[extract-sbom] step 4/7: extracting containers")
 	extractStart := time.Now()
