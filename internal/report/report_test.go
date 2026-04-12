@@ -369,6 +369,49 @@ func TestGenerateHumanComponentIndexUsesFinalBOMRefs(t *testing.T) {
 	}
 }
 
+// TestGenerateHumanComponentIndexFiltersAbsPathNames verifies that
+// file-cataloger artifacts (Name starts with /) are excluded from
+// the component occurrence index, even if they have delivery paths.
+func TestGenerateHumanComponentIndexFiltersAbsPathNames(t *testing.T) {
+	t.Parallel()
+
+	data := makeTestReportData()
+	data.BOM = &cdx.BOM{Components: &[]cdx.Component{
+		{
+			BOMRef: "extract-sbom:GOOD_COMP",
+			Type:   cdx.ComponentTypeLibrary,
+			Name:   "janino",
+			Properties: &[]cdx.Property{
+				{Name: "extract-sbom:delivery-path", Value: "delivery.zip/inner/janino.jar"},
+			},
+		},
+		{
+			BOMRef: "extract-sbom:BAD_COMP",
+			Type:   cdx.ComponentTypeFile,
+			Name:   "/tmp/extract-sbom-zip-12345/inner/janino.jar",
+			Properties: &[]cdx.Property{
+				{Name: "extract-sbom:delivery-path", Value: "delivery.zip/inner/janino.jar"},
+			},
+		},
+	}}
+
+	var buf bytes.Buffer
+	if err := GenerateHuman(data, "en", &buf); err != nil {
+		t.Fatalf("GenerateHuman error: %v", err)
+	}
+	output := buf.String()
+
+	if !strings.Contains(output, "### extract-sbom:GOOD_COMP") {
+		t.Error("properly-identified component missing from report")
+	}
+	if strings.Contains(output, "### extract-sbom:BAD_COMP") {
+		t.Error("file-cataloger artifact with absolute-path Name should be filtered from report")
+	}
+	if strings.Contains(output, "/tmp/extract-sbom-zip-12345") {
+		t.Error("temp extraction path leaked into report")
+	}
+}
+
 // TestGenerateHumanRootPropertiesAreSorted verifies that repeated runs render
 // root metadata properties in deterministic key order for audit stability.
 func TestGenerateHumanRootPropertiesAreSorted(t *testing.T) {

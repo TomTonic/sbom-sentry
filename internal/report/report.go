@@ -701,6 +701,12 @@ func collectComponentOccurrences(bom *cdx.BOM) []componentOccurrence {
 		if len(componentPropertyValues(comp, "extract-sbom:extraction-status")) > 0 {
 			continue
 		}
+		// Skip file-cataloger artifacts whose Name is an absolute filesystem
+		// path (temp extraction directory). These are noise entries without
+		// proper package identification.
+		if strings.HasPrefix(comp.Name, "/") {
+			continue
+		}
 
 		occurrences = append(occurrences, componentOccurrence{
 			ObjectID:      comp.BOMRef,

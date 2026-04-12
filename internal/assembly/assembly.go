@@ -91,7 +91,11 @@ func collectBOMRefKeys(tree *extract.ExtractionNode, scanMap map[string]*scan.Sc
 		seen[node.Path] = struct{}{}
 		if sr, ok := scanMap[node.Path]; ok && sr != nil && sr.Error == nil && sr.BOM != nil && sr.BOM.Components != nil {
 			for i := range *sr.BOM.Components {
-				seen[componentRefKey(node.Path, (*sr.BOM.Components)[i], i)] = struct{}{}
+				comp := (*sr.BOM.Components)[i]
+				if isFileCatalogerArtifact(comp) {
+					continue
+				}
+				seen[componentRefKey(node.Path, comp, i)] = struct{}{}
 			}
 		}
 
@@ -121,6 +125,30 @@ func componentRefKey(nodePath string, component cdx.Component, index int) string
 		component.Name,
 		component.Version,
 	)
+}
+
+// isFileCatalogerArtifact returns true for Syft file-cataloger entries that
+// represent the file itself rather than an identified package. These have
+// type=file and an absolute filesystem path (the temp extraction directory)
+// as the component name. Filtering them out avoids temp-path leaks and
+// duplicates with the properly-identified library-type entry.
+func isFileCatalogerArtifact(comp cdx.Component) bool {
+	return comp.Type == cdx.ComponentTypeFile && strings.HasPrefix(comp.Name, "/")
+}
+
+// syftLocationPath extracts the syft:location:0:path property from a
+// component. This path indicates where Syft found the file within the
+// scanned directory and can be used to refine the delivery-path.
+func syftLocationPath(comp cdx.Component) string {
+	if comp.Properties == nil {
+		return ""
+	}
+	for _, prop := range *comp.Properties {
+		if prop.Name == "syft:location:0:path" {
+			return prop.Value
+		}
+	}
+	return ""
 }
 
 // Assemble builds the final, unified CycloneDX BOM from the extraction tree
@@ -383,11 +411,29 @@ func processNode(node *extract.ExtractionNode, components *[]cdx.Component, depe
 		if sr.BOM.Components != nil {
 			for i := range *sr.BOM.Components {
 				comp := (*sr.BOM.Components)[i]
+
+				// Skip file-cataloger artifacts: file-type components with
+				// absolute paths as names are Syft's file cataloger entries
+				// for temp extraction directories. The same file is properly
+				// identified by content-aware catalogers (java-archive, etc.).
+				if isFileCatalogerArtifact(comp) {
+					continue
+				}
+
 				originalRef := comp.BOMRef
 				comp.BOMRef = refAssigner.RefForComponent(node.Path, comp, i)
 
-				// Add delivery-path property.
+				// Derive delivery path. For extracted-directory scans,
+				// refine using syft:location:0:path when available so the
+				// delivery path points at the specific archive inside the
+				// container rather than just the container itself.
 				deliveryPath := node.Path
+				if node.Status == extract.StatusExtracted {
+					if loc := syftLocationPath(comp); loc != "" {
+						deliveryPath = node.Path + "/" + strings.TrimPrefix(loc, "/")
+					}
+				}
+
 				props := []cdx.Property{
 					{Name: "extract-sbom:delivery-path", Value: deliveryPath},
 				}

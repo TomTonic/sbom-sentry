@@ -798,3 +798,151 @@ func TestAssembleNoInstallerHintInPhysicalMode(t *testing.T) {
 		}
 	}
 }
+
+// TestAssembleFiltersFileCatalogerArtifacts verifies that Syft file-cataloger
+// entries (type=file with absolute temp paths as names) are excluded from the
+// assembled BOM. Only the properly-identified library-type entry should survive.
+func TestAssembleFiltersFileCatalogerArtifacts(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	inputPath := filepath.Join(dir, "delivery.zip")
+	if err := os.WriteFile(inputPath, []byte("PK fake"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config.DefaultConfig()
+	cfg.InputPath = inputPath
+	cfg.OutputDir = dir
+
+	tree := &extract.ExtractionNode{
+		Path:         "delivery.zip",
+		OriginalPath: inputPath,
+		Status:       extract.StatusExtracted,
+		Format:       identify.FormatInfo{Format: identify.ZIP},
+	}
+
+	scans := []scan.ScanResult{
+		{
+			NodePath: "delivery.zip",
+			BOM: &cdx.BOM{
+				Components: &[]cdx.Component{
+					// File cataloger artifact — should be filtered out.
+					{
+						BOMRef: "file-entry",
+						Type:   cdx.ComponentTypeFile,
+						Name:   "/tmp/extract-sbom-zip-12345/plugins/janino-3.1.10.jar",
+					},
+					// Proper library identification — should survive.
+					{
+						BOMRef:     "lib-entry",
+						Type:       cdx.ComponentTypeLibrary,
+						Name:       "janino",
+						Version:    "3.1.10",
+						PackageURL: "pkg:maven/org.codehaus.janino/janino@3.1.10",
+					},
+				},
+			},
+		},
+	}
+
+	bom, err := Assemble(tree, scans, cfg)
+	if err != nil {
+		t.Fatalf("Assemble error: %v", err)
+	}
+
+	if bom.Components == nil {
+		t.Fatal("Components is nil")
+	}
+
+	for _, comp := range *bom.Components {
+		if strings.HasPrefix(comp.Name, "/") {
+			t.Errorf("file-cataloger artifact not filtered: Name=%q", comp.Name)
+		}
+	}
+
+	found := false
+	for _, comp := range *bom.Components {
+		if comp.Name == "janino" && comp.Version == "3.1.10" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("properly-identified library component missing from BOM")
+	}
+}
+
+// TestAssembleRefinesDeliveryPathFromSyftLocation verifies that for
+// extracted-directory scans, the delivery-path is refined using
+// syft:location:0:path instead of just using the container path.
+func TestAssembleRefinesDeliveryPathFromSyftLocation(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	inputPath := filepath.Join(dir, "delivery.zip")
+	if err := os.WriteFile(inputPath, []byte("PK fake"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config.DefaultConfig()
+	cfg.InputPath = inputPath
+	cfg.OutputDir = dir
+
+	tree := &extract.ExtractionNode{
+		Path:         "delivery.zip",
+		OriginalPath: inputPath,
+		Status:       extract.StatusExtracted,
+		Format:       identify.FormatInfo{Format: identify.ZIP},
+	}
+
+	scans := []scan.ScanResult{
+		{
+			NodePath: "delivery.zip",
+			BOM: &cdx.BOM{
+				Components: &[]cdx.Component{
+					{
+						BOMRef:     "pkg:maven/spring/web@6.0",
+						Type:       cdx.ComponentTypeLibrary,
+						Name:       "spring-web",
+						Version:    "6.0",
+						PackageURL: "pkg:maven/spring/web@6.0",
+						Properties: &[]cdx.Property{
+							{Name: "syft:location:0:path", Value: "/inner/services/app.zip"},
+							{Name: "syft:package:foundBy", Value: "java-archive-cataloger"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	bom, err := Assemble(tree, scans, cfg)
+	if err != nil {
+		t.Fatalf("Assemble error: %v", err)
+	}
+
+	if bom.Components == nil {
+		t.Fatal("Components is nil")
+	}
+
+	for _, comp := range *bom.Components {
+		if comp.Name != "spring-web" {
+			continue
+		}
+		if comp.Properties == nil {
+			t.Fatal("spring-web component has no properties")
+		}
+		for _, p := range *comp.Properties {
+			if p.Name == "extract-sbom:delivery-path" {
+				want := "delivery.zip/inner/services/app.zip"
+				if p.Value != want {
+					t.Errorf("delivery-path = %q, want %q", p.Value, want)
+				}
+				return
+			}
+		}
+		t.Error("spring-web component has no delivery-path property")
+	}
+	t.Error("spring-web component not found in BOM")
+}
