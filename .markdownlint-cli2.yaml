@@ -1,0 +1,17 @@
+# markdownlint-cli2 configuration for extract-sbom
+# https://github.com/DavidAnson/markdownlint-cli2
+
+# Exclude machine-generated report files (tool output, not source docs)
+ignores:
+  - "*.report.md"
+
+config:
+  # MD013: Line length — relax to 120 and exempt tables and code blocks.
+  # Technical markdown (tables, shell commands, long paths) routinely exceeds 80.
+  MD013:
+    line_length: 120
+    tables: false
+    code_blocks: false
+
+  # MD060: Table column style — cosmetic alignment preference, not enforced.
+  MD060: false
