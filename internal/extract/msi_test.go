@@ -217,3 +217,225 @@ func TestIsStreamNameMatchesDirectAndEncoded(t *testing.T) {
 		})
 	}
 }
+
+// TestParseMSIStringPoolWithStrings verifies that a well-formed string pool
+// correctly extracts strings with proper offsets.
+func TestParseMSIStringPoolWithStrings(t *testing.T) {
+	t.Parallel()
+
+	// Header: 4 bytes (codepage, ignored)
+	// Entry 0: length=5, refcount=1 → "Hello"
+	// Entry 1: length=5, refcount=1 → "World"
+	pool := []byte{
+		0x00, 0x00, 0x00, 0x00, // header
+		0x05, 0x00, 0x01, 0x00, // entry 0: length=5, refcount=1
+		0x05, 0x00, 0x01, 0x00, // entry 1: length=5, refcount=1
+	}
+	data := []byte("HelloWorld")
+
+	result, err := parseMSIStringPool(
+		bytes.NewReader(pool),
+		bytes.NewReader(data),
+		1024,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(result) != 2 {
+		t.Fatalf("got %d strings, want 2", len(result))
+	}
+	if result[0] != "Hello" {
+		t.Errorf("string[0] = %q, want %q", result[0], "Hello")
+	}
+	if result[1] != "World" {
+		t.Errorf("string[1] = %q, want %q", result[1], "World")
+	}
+}
+
+// TestParseMSIStringPoolTruncatedData verifies that truncated string data
+// results in empty strings rather than a panic.
+func TestParseMSIStringPoolTruncatedData(t *testing.T) {
+	t.Parallel()
+
+	pool := []byte{
+		0x00, 0x00, 0x00, 0x00, // header
+		0x0A, 0x00, 0x01, 0x00, // entry 0: length=10 but data only has 3 bytes
+	}
+	data := []byte("abc")
+
+	result, err := parseMSIStringPool(
+		bytes.NewReader(pool),
+		bytes.NewReader(data),
+		1024,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result) != 1 {
+		t.Fatalf("got %d strings, want 1", len(result))
+	}
+	if result[0] != "" {
+		t.Errorf("truncated entry should be empty, got %q", result[0])
+	}
+}
+
+// TestParseMSIPropertyTableWithValidData verifies end-to-end parsing of a
+// minimal Property table.
+func TestParseMSIPropertyTableWithValidData(t *testing.T) {
+	t.Parallel()
+
+	// String pool (1-based index): 1="Manufacturer", 2="Acme Corp",
+	// 3="ProductName", 4="Widget"
+	pool := []string{"", "Manufacturer", "Acme Corp", "ProductName", "Widget"}
+
+	// Two rows, colWidth=2, column-major: [name₀, name₁ | value₀, value₁]
+	data := []byte{
+		0x02, 0x00, // name₀ = 2 → pool[1] = "Manufacturer"
+		0x04, 0x00, // name₁ = 4 → pool[3] = "ProductName"
+		0x03, 0x00, // value₀ = 3 → pool[2] = "Acme Corp"
+		0x05, 0x00, // value₁ = 5 → pool[4] = "Widget"
+	}
+
+	result, err := parseMSIPropertyTable(
+		bytes.NewReader(data),
+		pool,
+		1024,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result["Manufacturer"] != "Acme Corp" {
+		t.Errorf("Manufacturer = %q, want %q", result["Manufacturer"], "Acme Corp")
+	}
+	if result["ProductName"] != "Widget" {
+		t.Errorf("ProductName = %q, want %q", result["ProductName"], "Widget")
+	}
+}
+
+// TestParseMSIPropertyTableEmpty verifies that an empty Property table
+// returns an empty map without error.
+func TestParseMSIPropertyTableEmpty(t *testing.T) {
+	t.Parallel()
+
+	result, err := parseMSIPropertyTable(
+		bytes.NewReader([]byte{}),
+		[]string{""},
+		1024,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result) != 0 {
+		t.Errorf("expected empty map, got %d entries", len(result))
+	}
+}
+
+// TestParseMSIPropertyTableOutOfBoundsIndices verifies that property rows
+// with out-of-bounds string indices are silently skipped.
+func TestParseMSIPropertyTableOutOfBoundsIndices(t *testing.T) {
+	t.Parallel()
+
+	pool := []string{"", "Manufacturer", "Acme"}
+
+	// One row where value index is out of bounds.
+	data := []byte{
+		0x02, 0x00, // name = 2 → pool[1] = "Manufacturer"
+		0xFF, 0x00, // value = 255 → out of bounds
+	}
+
+	result, err := parseMSIPropertyTable(
+		bytes.NewReader(data),
+		pool,
+		1024,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := result["Manufacturer"]; ok {
+		t.Error("expected out-of-bounds row to be skipped")
+	}
+}
+
+// TestIsPropertyTableStreamVariants verifies all known Property table name variants.
+func TestIsPropertyTableStreamVariants(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		want bool
+	}{
+		{"Property", true},
+		{"!Property", true},
+		{"_Property", true},
+		{"!_Property", true},
+		{"Other", false},
+		{"", false},
+		{"\u4840\u4559\u44F2\u4568\u4737", true}, // encoded "!Property"
+	}
+
+	for _, tt := range tests {
+		got := isPropertyTableStream(tt.name)
+		if got != tt.want {
+			t.Errorf("isPropertyTableStream(%q) = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
+
+// TestDecodeMSICharAllRanges verifies decodeMSIChar covers all value ranges.
+func TestDecodeMSICharAllRanges(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		input rune
+		want  rune
+	}{
+		{0, '0'},
+		{9, '9'},
+		{10, 'A'},
+		{35, 'Z'},
+		{36, 'a'},
+		{61, 'z'},
+		{62, '.'},
+		{63, '_'},
+		{100, '_'},
+	}
+
+	for _, tt := range tests {
+		got := decodeMSIChar(tt.input)
+		if got != tt.want {
+			t.Errorf("decodeMSIChar(%d) = %c, want %c", tt.input, got, tt.want)
+		}
+	}
+}
+
+// TestReadAllLimitedInvalidLimit verifies that a zero or negative limit
+// returns an error.
+func TestReadAllLimitedInvalidLimit(t *testing.T) {
+	t.Parallel()
+
+	_, err := readAllLimited(bytes.NewReader([]byte("data")), 0, "test")
+	if err == nil {
+		t.Error("expected error for zero limit")
+	}
+
+	_, err = readAllLimited(bytes.NewReader([]byte("data")), -1, "test")
+	if err == nil {
+		t.Error("expected error for negative limit")
+	}
+}
+
+// TestReadAllLimitedAcceptsExactSize verifies that data exactly at the
+// limit is accepted.
+func TestReadAllLimitedAcceptsExactSize(t *testing.T) {
+	t.Parallel()
+
+	data, err := readAllLimited(bytes.NewReader([]byte("abcd")), 4, "test")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(data) != "abcd" {
+		t.Errorf("data = %q, want %q", string(data), "abcd")
+	}
+}
