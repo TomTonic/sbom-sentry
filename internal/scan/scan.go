@@ -48,6 +48,10 @@ type ScanResult struct { //nolint:revive // stuttering is acceptable for clarity
 // Version is the extract-sbom version string, set at build time.
 var Version = "dev"
 
+// syftGetSourceMu serializes syft.GetSource() calls to avoid races in
+// upstream stereoscope temp-dir generator initialization under parallel scans.
+var syftGetSourceMu sync.Mutex
+
 // ScanAll walks the extraction tree and invokes Syft on each scannable node.
 // SyftNative leaves are scanned using the original file path; extracted
 // directories are scanned at their extraction output path.
@@ -432,6 +436,9 @@ func collectScanTargets(node *extract.ExtractionNode, results *[]ScanResult) {
 
 // findNode locates a node in the tree by path.
 func findNode(root *extract.ExtractionNode, path string) *extract.ExtractionNode {
+	if root == nil {
+		return nil
+	}
 	if root.Path == path {
 		return root
 	}
@@ -475,7 +482,11 @@ func scanNode(ctx context.Context, result *ScanResult, root *extract.ExtractionN
 	result.syftPackages = nil
 
 	// Create Syft source.
+	// NOTE: syft.GetSource() currently touches shared global state in an
+	// upstream dependency, so concurrent calls can race under -race.
+	syftGetSourceMu.Lock()
 	src, err := syft.GetSource(ctx, target, nil)
+	syftGetSourceMu.Unlock()
 	if err != nil {
 		result.Error = fmt.Errorf("scan: get source for %s: %w", target, err)
 		return

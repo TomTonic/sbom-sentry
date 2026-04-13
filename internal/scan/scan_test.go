@@ -161,6 +161,16 @@ func TestFindNodeLocatesNodeByPath(t *testing.T) {
 	}
 }
 
+// TestFindNodeHandlesNilRoot verifies nil safety when callers search
+// an empty extraction tree.
+func TestFindNodeHandlesNilRoot(t *testing.T) {
+	t.Parallel()
+
+	if got := findNode(nil, "any/path"); got != nil {
+		t.Fatalf("findNode(nil, ...) = %v, want nil", got)
+	}
+}
+
 // TestScanResultZeroValue verifies that the zero-value ScanResult
 // has the expected empty state.
 func TestScanResultZeroValue(t *testing.T) {
