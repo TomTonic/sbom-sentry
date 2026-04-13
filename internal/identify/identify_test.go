@@ -201,6 +201,47 @@ func TestIdentifyDetectsMSIByOLEMagic(t *testing.T) {
 	}
 }
 
+// TestIdentifyOLEDocumentExtensionsReturnUnknown verifies that legacy Office
+// files (.xls, .doc, .ppt, etc.) sharing the OLE/MSI magic bytes are NOT
+// identified as MSI. These are document formats, not software packages, and
+// must not be forwarded to 7zz for extraction as installer archives.
+func TestIdentifyOLEDocumentExtensionsReturnUnknown(t *testing.T) {
+	t.Parallel()
+
+	oleHeader := []byte{0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1}
+	docExts := []string{
+		".doc", ".dot",
+		".xls", ".xlt", ".xla",
+		".ppt", ".pot", ".pps", ".ppa",
+		".vsd", ".vss", ".vst",
+		".msg", ".pub", ".mdb",
+	}
+
+	for _, ext := range docExts {
+		ext := ext
+		t.Run(ext, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+
+			content := make([]byte, 300)
+			copy(content, oleHeader)
+
+			path := createTestFile(t, dir, "document"+ext, content)
+
+			info, err := Identify(context.Background(), path)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if info.Format != Unknown {
+				t.Errorf("Format = %v, want Unknown for OLE document extension %s", info.Format, ext)
+			}
+			if info.Extractable {
+				t.Errorf("Extractable = true, want false for OLE document extension %s", ext)
+			}
+		})
+	}
+}
+
 // TestIdentifyDetects7zByMagicBytes verifies that 7z archive files
 // are detected by their distinctive magic byte sequence.
 func TestIdentifyDetects7zByMagicBytes(t *testing.T) {

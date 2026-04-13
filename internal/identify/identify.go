@@ -83,6 +83,25 @@ type FormatInfo struct {
 	Extractable bool // true if extract-sbom can extract it
 }
 
+// oleNonInstallerExtensions lists OLE Compound Document file extensions that
+// are NOT MSI installer packages. OLE compound documents share the same
+// magic bytes (D0 CF 11 E0 A1 B1 1A E1) as MSI files, but these extensions
+// identify legacy document formats that must not be attempted as software
+// packages and so return Unknown instead of MSI.
+var oleNonInstallerExtensions = map[string]bool{
+	// Legacy Microsoft Office documents
+	".doc": true, ".dot": true, // Word
+	".xls": true, ".xlt": true, ".xla": true, // Excel
+	".ppt": true, ".pot": true, ".pps": true, ".ppa": true, // PowerPoint
+	// Visio drawings
+	".vsd": true, ".vss": true, ".vst": true,
+	// Other OLE document formats
+	".msg": true, // Outlook message
+	".pub": true, // Publisher
+	".mdb": true, // Access database
+	".one": true, // OneNote section
+}
+
 // syftNativeExtensions lists file extensions for formats that Syft handles
 // natively via its dedicated catalogers. These are never extracted by
 // extract-sbom and instead passed directly to Syft for richer metadata.
@@ -178,10 +197,19 @@ func identifyFromHeader(header []byte, ext string, baseName string) FormatInfo {
 		return info
 	}
 
-	// MSI/OLE: D0 CF 11 E0 A1 B1 1A E1 at offset 0
+	// MSI/OLE: D0 CF 11 E0 A1 B1 1A E1 at offset 0.
+	// This magic byte sequence is shared by MSI installer packages and all
+	// legacy OLE Compound Document formats (.doc, .xls, .ppt, etc.). Only
+	// treat the file as an MSI when the extension is a known installer
+	// extension (.msi, .msp) or unrecognized; extensions mapped in
+	// oleNonInstallerExtensions return Unknown so they are never passed to
+	// 7zz as software packages.
 	if len(header) >= 8 &&
 		header[0] == 0xD0 && header[1] == 0xCF && header[2] == 0x11 && header[3] == 0xE0 &&
 		header[4] == 0xA1 && header[5] == 0xB1 && header[6] == 0x1A && header[7] == 0xE1 {
+		if oleNonInstallerExtensions[ext] {
+			return info // Unknown — document format, not an extractable installer
+		}
 		info.Format = MSI
 		info.MIMEType = "application/x-msi"
 		info.Extractable = true // when 7zz is available
