@@ -177,7 +177,7 @@ func Run(ctx context.Context, cfg config.Config) Result {
 			if bom != nil && bom.Components != nil {
 				finalBOMCount = len(*bom.Components)
 			}
-			fsCount, lvCount, dedupCount := 0, 0, 0
+			fsCount, lvCount, weakCount, purlCount := 0, 0, 0, 0
 			for _, s := range asmSuppressions {
 				switch s.Reason {
 				case assembly.SuppressionFSArtifact:
@@ -185,12 +185,14 @@ func Run(ctx context.Context, cfg config.Config) Result {
 				case assembly.SuppressionLowValueFile:
 					lvCount++
 				case assembly.SuppressionWeakDuplicate:
-					dedupCount++
+					weakCount++
+				case assembly.SuppressionPURLDuplicate:
+					purlCount++
 				}
 			}
 			cfg.EmitProgress(config.ProgressNormal,
-				"[extract-sbom] components: %d raw → removed %d (fs-artifacts=%d, low-value=%d, dedup=%d) → \033[1m%d\033[0m in BOM",
-				totalScannedComponents, len(asmSuppressions), fsCount, lvCount, dedupCount, finalBOMCount)
+				"[extract-sbom] components: %d raw → removed %d (fs-artifacts=%d, low-value=%d, weak-duplicates=%d, purl-duplicates=%d) → \033[1m%d\033[0m in BOM",
+				totalScannedComponents, len(asmSuppressions), fsCount, lvCount, weakCount, purlCount, finalBOMCount)
 		}
 		if asmErr != nil {
 			addIssue("assembly", asmErr)
@@ -212,9 +214,7 @@ func Run(ctx context.Context, cfg config.Config) Result {
 					Error:    writeErr,
 				})
 				sbomPath = ""
-				if fatalErr == nil {
-					fatalErr = fmt.Errorf("write SBOM: %w", writeErr)
-				}
+				fatalErr = fmt.Errorf("write SBOM: %w", writeErr)
 			} else {
 				assembledBOM = bom
 			}

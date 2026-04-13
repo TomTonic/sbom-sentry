@@ -47,6 +47,12 @@ const (
 	// the best entry in that group. Only dropped when the best entry is
 	// clearly superior (score ≥ 4, i.e. has a PURL).
 	SuppressionWeakDuplicate = "weak-duplicate"
+
+	// SuppressionPURLDuplicate identifies entries that carry the same PURL as
+	// another component and are therefore collapsed into a single surviving
+	// representative. The survivor inherits all unique leaf-most delivery and
+	// evidence paths from the whole group.
+	SuppressionPURLDuplicate = "purl-duplicate"
 )
 
 // SuppressionRecord documents a component that was removed from the SBOM
@@ -62,10 +68,10 @@ type SuppressionRecord struct {
 	// DeliveryPath is the delivery-path context at the time of suppression.
 	DeliveryPath string
 	// KeptName is the name of the component that replaced this one.
-	// Only set for SuppressionWeakDuplicate.
+	// Only set for duplicate suppressions.
 	KeptName string
 	// KeptFoundBy is the foundBy of the replacement component.
-	// Only set for SuppressionWeakDuplicate.
+	// Only set for duplicate suppressions.
 	KeptFoundBy string
 }
 
@@ -384,7 +390,7 @@ func mergePURLDuplicateScanCandidates(candidates []scanComponentCandidate) ([]sc
 			}
 			suppress[idx] = struct{}{}
 			suppressions = append(suppressions, SuppressionRecord{
-				Reason:       SuppressionWeakDuplicate,
+				Reason:       SuppressionPURLDuplicate,
 				Component:    candidates[idx].component,
 				FoundBy:      candidates[idx].foundBy,
 				DeliveryPath: candidates[idx].deliveryPath,
@@ -553,10 +559,11 @@ func firstComponentPropertyValue(comp cdx.Component, name string) string {
 
 // deduplicateGlobalComponents performs cross-node deduplication on the final
 // assembled component list. Components with the same PURL are collapsed into
-// a single entry regardless of delivery path — the surviving component
-// inherits all unique delivery-path and evidence-path properties from the
-// suppressed entries. Dependency graph references are rewritten so no
-// dangling BOMRefs remain.
+// a single entry regardless of delivery path. The surviving component
+// inherits all unique leaf-most delivery-path and evidence-path properties
+// from the suppressed entries, and redundant ancestor container paths are
+// dropped. Dependency graph references are rewritten so no dangling BOMRefs
+// remain.
 func deduplicateGlobalComponents(components []cdx.Component, dependencies []cdx.Dependency) ([]cdx.Component, []SuppressionRecord) {
 	// Index: PURL → list of component indices.
 	groups := make(map[string][]int)
@@ -612,7 +619,7 @@ func deduplicateGlobalComponents(components []cdx.Component, dependencies []cdx.
 			refRewrite[components[idx].BOMRef] = best.BOMRef
 			dp := componentPropertyValue(components[idx], "extract-sbom:delivery-path")
 			suppressions = append(suppressions, SuppressionRecord{
-				Reason:       SuppressionWeakDuplicate,
+				Reason:       SuppressionPURLDuplicate,
 				Component:    components[idx],
 				FoundBy:      firstComponentPropertyValue(components[idx], "syft:package:foundBy"),
 				DeliveryPath: dp,
@@ -667,7 +674,9 @@ var mergedPropertyNames = []string{
 }
 
 // collectMergedProperties gathers all unique values for the merged property
-// names across the given component indices.
+// names across the given component indices. For logical path properties it
+// keeps only leaf-most values so an enclosing archive path does not survive
+// alongside a more specific nested artifact path.
 func collectMergedProperties(components []cdx.Component, idxs []int) map[string][]string {
 	sets := make(map[string]map[string]struct{}, len(mergedPropertyNames))
 	for _, name := range mergedPropertyNames {
@@ -693,11 +702,65 @@ func collectMergedProperties(components []cdx.Component, idxs []int) map[string]
 			vals = append(vals, v)
 		}
 		sort.Strings(vals)
+		vals = pruneMergedPathValues(name, vals)
 		if len(vals) > 0 {
 			result[name] = vals
 		}
 	}
 	return result
+}
+
+func pruneMergedPathValues(name string, values []string) []string {
+	switch name {
+	case "extract-sbom:delivery-path", "extract-sbom:evidence-path":
+		return leafMostLogicalPaths(values)
+	default:
+		return values
+	}
+}
+
+func leafMostLogicalPaths(values []string) []string {
+	if len(values) < 2 {
+		return values
+	}
+
+	cleaned := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "" {
+			continue
+		}
+		cleaned = append(cleaned, path.Clean(value))
+	}
+	if len(cleaned) < 2 {
+		return cleaned
+	}
+
+	kept := make([]string, 0, len(cleaned))
+	for i, candidate := range cleaned {
+		redundant := false
+		for j, other := range cleaned {
+			if i == j {
+				continue
+			}
+			if isAncestorLogicalPath(candidate, other) {
+				redundant = true
+				break
+			}
+		}
+		if !redundant {
+			kept = append(kept, candidate)
+		}
+	}
+	return kept
+}
+
+func isAncestorLogicalPath(ancestor, descendant string) bool {
+	ancestor = strings.TrimSuffix(path.Clean(ancestor), "/")
+	descendant = path.Clean(descendant)
+	if ancestor == "" || ancestor == "." || ancestor == descendant {
+		return false
+	}
+	return strings.HasPrefix(descendant, ancestor+"/")
 }
 
 // replaceMultiValueProperties replaces the merged property names on comp with

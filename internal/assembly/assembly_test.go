@@ -1127,15 +1127,15 @@ func TestAssembleMergesSamePURLAtSameLocationWithDifferentEvidence(t *testing.T)
 		t.Errorf("surviving component is missing evidence-path %q", manifestPath)
 	}
 
-	// Exactly one suppression for weak-duplicate.
-	weakCount := 0
+	// Exactly one suppression for PURL-duplicate.
+	purlCount := 0
 	for _, s := range suppressions {
-		if s.Reason == SuppressionWeakDuplicate && s.Component.PackageURL == purl {
-			weakCount++
+		if s.Reason == SuppressionPURLDuplicate && s.Component.PackageURL == purl {
+			purlCount++
 		}
 	}
-	if weakCount != 1 {
-		t.Errorf("expected 1 SuppressionWeakDuplicate for %s, got %d", purl, weakCount)
+	if purlCount != 1 {
+		t.Errorf("expected 1 SuppressionPURLDuplicate for %s, got %d", purl, purlCount)
 	}
 }
 
@@ -1330,15 +1330,120 @@ func TestAssembleDeduplicatesSamePURLAtDifferentPaths(t *testing.T) {
 		t.Errorf("surviving component should carry both evidence paths; got %v", evidencePaths)
 	}
 
-	// Exactly one suppression.
-	weakCount := 0
+	// Exactly one PURL-duplicate suppression.
+	purlCount := 0
 	for _, s := range suppressions {
-		if s.Reason == SuppressionWeakDuplicate && s.Component.PackageURL == purl {
-			weakCount++
+		if s.Reason == SuppressionPURLDuplicate && s.Component.PackageURL == purl {
+			purlCount++
 		}
 	}
-	if weakCount != 1 {
-		t.Errorf("expected 1 cross-path suppression, got %d", weakCount)
+	if purlCount != 1 {
+		t.Errorf("expected 1 cross-path PURL-duplicate suppression, got %d", purlCount)
+	}
+}
+
+func TestDeduplicateGlobalComponentsPrunesAncestorDeliveryPaths(t *testing.T) {
+	t.Parallel()
+
+	const purl = "pkg:maven/jrt-fs/jrt-fs@11.0.30"
+	components := []cdx.Component{
+		{
+			BOMRef:     "parent-zip",
+			Type:       cdx.ComponentTypeLibrary,
+			Name:       "jrt-fs",
+			Version:    "11.0.30",
+			PackageURL: purl,
+			Properties: &[]cdx.Property{
+				{Name: "extract-sbom:delivery-path", Value: "delivery.zip/windows/Client-37.0.5.0.zip"},
+				{Name: "syft:package:foundBy", Value: "java-archive-cataloger"},
+			},
+		},
+		{
+			BOMRef:     "x64-jar",
+			Type:       cdx.ComponentTypeLibrary,
+			Name:       "jrt-fs",
+			Version:    "11.0.30",
+			PackageURL: purl,
+			Properties: &[]cdx.Property{
+				{Name: "extract-sbom:delivery-path", Value: "delivery.zip/windows/Client-37.0.5.0.zip/foundation/java/x64/windows/jre/lib/jrt-fs.jar"},
+				{Name: "extract-sbom:evidence-path", Value: "delivery.zip/windows/Client-37.0.5.0.zip/foundation/java/x64/windows/jre/lib/jrt-fs.jar/META-INF/MANIFEST.MF"},
+				{Name: "syft:package:foundBy", Value: "java-archive-cataloger"},
+			},
+		},
+		{
+			BOMRef:     "x86-jar",
+			Type:       cdx.ComponentTypeLibrary,
+			Name:       "jrt-fs",
+			Version:    "11.0.30",
+			PackageURL: purl,
+			Properties: &[]cdx.Property{
+				{Name: "extract-sbom:delivery-path", Value: "delivery.zip/windows/Client-37.0.5.0.zip/foundation/java/x86/windows/jre/lib/jrt-fs.jar"},
+				{Name: "extract-sbom:evidence-path", Value: "delivery.zip/windows/Client-37.0.5.0.zip/foundation/java/x86/windows/jre/lib/jrt-fs.jar/META-INF/MANIFEST.MF"},
+				{Name: "syft:package:foundBy", Value: "java-archive-cataloger"},
+			},
+		},
+		{
+			BOMRef:     "linux-jar",
+			Type:       cdx.ComponentTypeLibrary,
+			Name:       "jrt-fs",
+			Version:    "11.0.30",
+			PackageURL: purl,
+			Properties: &[]cdx.Property{
+				{Name: "extract-sbom:delivery-path", Value: "delivery.zip/linux/SharedComponents.tar.gz/rsFrame1/foundation/java/x64/linux/jre/lib/jrt-fs.jar"},
+				{Name: "extract-sbom:evidence-path", Value: "delivery.zip/linux/SharedComponents.tar.gz/rsFrame1/foundation/java/x64/linux/jre/lib/jrt-fs.jar/META-INF/MANIFEST.MF"},
+				{Name: "syft:package:foundBy", Value: "java-archive-cataloger"},
+			},
+		},
+	}
+
+	filtered, suppressions := deduplicateGlobalComponents(components, nil)
+	if len(filtered) != 1 {
+		t.Fatalf("filtered components = %d, want 1", len(filtered))
+	}
+
+	if filtered[0].Properties == nil {
+		t.Fatal("surviving component has no properties")
+	}
+	deliveryPaths := map[string]bool{}
+	evidencePaths := map[string]bool{}
+	for _, p := range *filtered[0].Properties {
+		if p.Name == "extract-sbom:delivery-path" {
+			deliveryPaths[p.Value] = true
+		}
+		if p.Name == "extract-sbom:evidence-path" {
+			evidencePaths[p.Value] = true
+		}
+	}
+	if deliveryPaths["delivery.zip/windows/Client-37.0.5.0.zip"] {
+		t.Fatal("redundant ancestor delivery path should have been pruned")
+	}
+	for _, want := range []string{
+		"delivery.zip/windows/Client-37.0.5.0.zip/foundation/java/x64/windows/jre/lib/jrt-fs.jar",
+		"delivery.zip/windows/Client-37.0.5.0.zip/foundation/java/x86/windows/jre/lib/jrt-fs.jar",
+		"delivery.zip/linux/SharedComponents.tar.gz/rsFrame1/foundation/java/x64/linux/jre/lib/jrt-fs.jar",
+	} {
+		if !deliveryPaths[want] {
+			t.Fatalf("missing delivery path %q in merged component: %v", want, deliveryPaths)
+		}
+	}
+	for _, want := range []string{
+		"delivery.zip/windows/Client-37.0.5.0.zip/foundation/java/x64/windows/jre/lib/jrt-fs.jar/META-INF/MANIFEST.MF",
+		"delivery.zip/windows/Client-37.0.5.0.zip/foundation/java/x86/windows/jre/lib/jrt-fs.jar/META-INF/MANIFEST.MF",
+		"delivery.zip/linux/SharedComponents.tar.gz/rsFrame1/foundation/java/x64/linux/jre/lib/jrt-fs.jar/META-INF/MANIFEST.MF",
+	} {
+		if !evidencePaths[want] {
+			t.Fatalf("missing evidence path %q in merged component: %v", want, evidencePaths)
+		}
+	}
+
+	purlCount := 0
+	for _, s := range suppressions {
+		if s.Reason == SuppressionPURLDuplicate && s.Component.PackageURL == purl {
+			purlCount++
+		}
+	}
+	if purlCount != 3 {
+		t.Fatalf("expected 3 PURL-duplicate suppressions, got %d", purlCount)
 	}
 }
 
@@ -1459,15 +1564,15 @@ func TestAssembleDeduplicatesCrossNodeComponents(t *testing.T) {
 		t.Error("surviving component should have evidence-path")
 	}
 
-	// Exactly one weak-duplicate suppression for the jrt-fs PURL.
-	weakCount := 0
+	// Exactly one PURL-duplicate suppression for the jrt-fs PURL.
+	purlCount := 0
 	for _, s := range suppressions {
-		if s.Reason == SuppressionWeakDuplicate && s.Component.PackageURL == purl {
-			weakCount++
+		if s.Reason == SuppressionPURLDuplicate && s.Component.PackageURL == purl {
+			purlCount++
 		}
 	}
-	if weakCount != 1 {
-		t.Errorf("expected 1 cross-node SuppressionWeakDuplicate for %s, got %d", purl, weakCount)
+	if purlCount != 1 {
+		t.Errorf("expected 1 cross-node SuppressionPURLDuplicate for %s, got %d", purl, purlCount)
 	}
 
 	// Verify no dangling BOMRefs in the dependency graph.

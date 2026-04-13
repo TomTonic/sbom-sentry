@@ -524,6 +524,45 @@ func TestGenerateHumanComponentIndexMergesWeakDuplicatePlaceholders(t *testing.T
 	}
 }
 
+func TestGenerateHumanComponentIndexPrunesAncestorDeliveryPaths(t *testing.T) {
+	t.Parallel()
+
+	data := makeTestReportData()
+	data.BOM = &cdx.BOM{Components: &[]cdx.Component{{
+		BOMRef:     "extract-sbom:JRT_FS",
+		Type:       cdx.ComponentTypeLibrary,
+		Name:       "jrt-fs",
+		Version:    "11.0.30",
+		PackageURL: "pkg:maven/jrt-fs/jrt-fs@11.0.30",
+		Properties: &[]cdx.Property{
+			{Name: "extract-sbom:delivery-path", Value: "delivery.zip/windows/Client.zip"},
+			{Name: "extract-sbom:delivery-path", Value: "delivery.zip/windows/Client.zip/foundation/java/x64/windows/jre/lib/jrt-fs.jar"},
+			{Name: "extract-sbom:delivery-path", Value: "delivery.zip/windows/Client.zip/foundation/java/x86/windows/jre/lib/jrt-fs.jar"},
+			{Name: "extract-sbom:evidence-path", Value: "delivery.zip/windows/Client.zip/foundation/java/x64/windows/jre/lib/jrt-fs.jar/META-INF/MANIFEST.MF"},
+			{Name: "extract-sbom:evidence-path", Value: "delivery.zip/windows/Client.zip/foundation/java/x86/windows/jre/lib/jrt-fs.jar/META-INF/MANIFEST.MF"},
+			{Name: "syft:package:foundBy", Value: "java-archive-cataloger"},
+		},
+	}}}
+
+	var buf bytes.Buffer
+	if err := GenerateHuman(data, "en", &buf); err != nil {
+		t.Fatalf("GenerateHuman error: %v", err)
+	}
+	output := buf.String()
+
+	if strings.Contains(output, "- Delivery path: `delivery.zip/windows/Client.zip`\n") {
+		t.Fatal("report should not render redundant ancestor delivery path")
+	}
+	for _, fragment := range []string{
+		"- Delivery path: `delivery.zip/windows/Client.zip/foundation/java/x64/windows/jre/lib/jrt-fs.jar`",
+		"- Delivery path: `delivery.zip/windows/Client.zip/foundation/java/x86/windows/jre/lib/jrt-fs.jar`",
+	} {
+		if !strings.Contains(output, fragment) {
+			t.Fatalf("report output missing %q", fragment)
+		}
+	}
+}
+
 // TestGenerateHumanRootPropertiesAreSorted verifies that repeated runs render
 // root metadata properties in deterministic key order for audit stability.
 func TestGenerateHumanRootPropertiesAreSorted(t *testing.T) {

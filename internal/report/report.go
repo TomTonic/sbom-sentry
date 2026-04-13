@@ -575,6 +575,7 @@ type translations struct {
 	suppressionReasonFSArtifact    string
 	suppressionReasonLowValueFile  string
 	suppressionReasonWeakDuplicate string
+	suppressionReasonPURLDuplicate string
 	suppressionReplacedBy          string
 }
 
@@ -651,6 +652,7 @@ func getTranslations(lang string) translations {
 			suppressionReasonFSArtifact:    "FS-Cataloger-Artefakt",
 			suppressionReasonLowValueFile:  "Datei ohne Identifikationsmerkmale",
 			suppressionReasonWeakDuplicate: "Schwaches Duplikat",
+			suppressionReasonPURLDuplicate: "PURL-Duplikat",
 			suppressionReplacedBy:          "Ersetzt durch",
 		}
 	default:
@@ -724,6 +726,7 @@ func getTranslations(lang string) translations {
 			suppressionReasonFSArtifact:    "FS-cataloger artifact",
 			suppressionReasonLowValueFile:  "File with no identification metadata",
 			suppressionReasonWeakDuplicate: "Weak duplicate",
+			suppressionReasonPURLDuplicate: "PURL duplicate",
 			suppressionReplacedBy:          "Replaced by",
 		}
 	}
@@ -822,7 +825,7 @@ func writeSummary(w io.Writer, data ReportData, ext extractionStats, scn scanSta
 		ext.Pending,
 	)
 	fmt.Fprintf(w, "- %s: total=%d successful=%d errors=%d components-found=%d\n", t.summaryScan, scn.Total, scn.Successful, scn.Errors, scn.TotalComponents)
-	fsCount, lvCount, dedupCount := 0, 0, 0
+	fsCount, lvCount, weakCount, purlCount := 0, 0, 0, 0
 	for _, s := range data.Suppressions {
 		switch s.Reason {
 		case assembly.SuppressionFSArtifact:
@@ -830,16 +833,18 @@ func writeSummary(w io.Writer, data ReportData, ext extractionStats, scn scanSta
 		case assembly.SuppressionLowValueFile:
 			lvCount++
 		case assembly.SuppressionWeakDuplicate:
-			dedupCount++
+			weakCount++
+		case assembly.SuppressionPURLDuplicate:
+			purlCount++
 		}
 	}
 	fmt.Fprintf(
 		w,
-		"- %s: %d raw → removed %d (fs-artifacts=%d, low-value=%d, dedup=%d) → %d in BOM → filtered %d (abs-path=%d, low-value=%d, merged=%d) → indexed %d\n",
+		"- %s: %d raw → removed %d (fs-artifacts=%d, low-value=%d, weak-duplicates=%d, purl-duplicates=%d) → %d in BOM → filtered %d (abs-path=%d, low-value=%d, merged=%d) → indexed %d\n",
 		t.summaryComponents,
 		scn.TotalComponents,
 		len(data.Suppressions),
-		fsCount, lvCount, dedupCount,
+		fsCount, lvCount, weakCount, purlCount,
 		idx.TotalComponents,
 		idx.FilteredAbsolutePathNames+idx.FilteredLowValueFileArtifacts+idx.DuplicateMerged,
 		idx.FilteredAbsolutePathNames,
@@ -995,7 +1000,7 @@ func writeSuppressionReport(w io.Writer, suppressions []assembly.SuppressionReco
 	}
 
 	// Group by reason for a structured overview.
-	var fsArtifacts, lowValue, weakDups []assembly.SuppressionRecord
+	var fsArtifacts, lowValue, weakDups, purlDups []assembly.SuppressionRecord
 	for i := range suppressions {
 		switch suppressions[i].Reason {
 		case assembly.SuppressionFSArtifact:
@@ -1004,6 +1009,8 @@ func writeSuppressionReport(w io.Writer, suppressions []assembly.SuppressionReco
 			lowValue = append(lowValue, suppressions[i])
 		case assembly.SuppressionWeakDuplicate:
 			weakDups = append(weakDups, suppressions[i])
+		case assembly.SuppressionPURLDuplicate:
+			purlDups = append(purlDups, suppressions[i])
 		}
 	}
 
@@ -1013,6 +1020,7 @@ func writeSuppressionReport(w io.Writer, suppressions []assembly.SuppressionReco
 	fmt.Fprintf(w, "| %s | %d |\n", t.suppressionReasonFSArtifact, len(fsArtifacts))
 	fmt.Fprintf(w, "| %s | %d |\n", t.suppressionReasonLowValueFile, len(lowValue))
 	fmt.Fprintf(w, "| %s | %d |\n", t.suppressionReasonWeakDuplicate, len(weakDups))
+	fmt.Fprintf(w, "| %s | %d |\n", t.suppressionReasonPURLDuplicate, len(purlDups))
 	fmt.Fprintln(w)
 
 	// FS-cataloger artifacts.
@@ -1076,6 +1084,32 @@ func writeSuppressionReport(w io.Writer, suppressions []assembly.SuppressionReco
 				keptBy += " (" + r.KeptFoundBy + ")"
 			}
 			fmt.Fprintf(w, "| `%s` | `%s` | `%s` |\n",
+				escapeMarkdownCell(r.Component.Name),
+				escapeMarkdownCell(r.DeliveryPath),
+				escapeMarkdownCell(keptBy))
+		}
+		fmt.Fprintln(w)
+	}
+
+	// PURL duplicates across scan nodes or evidence variants.
+	if len(purlDups) > 0 {
+		fmt.Fprintf(w, "#### %s (%d)\n\n", t.suppressionReasonPURLDuplicate, len(purlDups))
+		fmt.Fprintln(w, "These entries carried the same PURL as another retained component. extract-sbom keeps one representative, merges all unique leaf-most delivery and evidence paths into it, and drops redundant ancestor container paths such as an enclosing ZIP when a nested JAR path is also present.")
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "| Name (suppressed) | Delivery path | "+t.suppressionReplacedBy+" |")
+		fmt.Fprintln(w, "|---|---|---|")
+		maxRows := 20
+		for i := range purlDups {
+			if i >= maxRows {
+				fmt.Fprintf(w, "| ... | ... | %d additional entries omitted |\n", len(purlDups)-maxRows)
+				break
+			}
+			r := purlDups[i]
+			keptBy := r.KeptName
+			if r.KeptFoundBy != "" {
+				keptBy = keptBy + " (`" + escapeMarkdownCell(r.KeptFoundBy) + "`)"
+			}
+			fmt.Fprintf(w, "| `%s` | `%s` | %s |\n",
 				escapeMarkdownCell(r.Component.Name),
 				escapeMarkdownCell(r.DeliveryPath),
 				escapeMarkdownCell(keptBy))
@@ -1347,13 +1381,63 @@ func componentPropertyValues(comp cdx.Component, name string) []string {
 	}
 
 	values := make([]string, 0)
+	seen := make(map[string]struct{})
 	for _, prop := range *comp.Properties {
 		if prop.Name != name || prop.Value == "" {
 			continue
 		}
+		if _, ok := seen[prop.Value]; ok {
+			continue
+		}
+		seen[prop.Value] = struct{}{}
 		values = append(values, prop.Value)
 	}
+	if name == "extract-sbom:delivery-path" || name == "extract-sbom:evidence-path" {
+		return leafMostLogicalPaths(values)
+	}
 	return values
+}
+
+func leafMostLogicalPaths(values []string) []string {
+	if len(values) < 2 {
+		return values
+	}
+
+	cleaned := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "" {
+			continue
+		}
+		cleaned = append(cleaned, path.Clean(value))
+	}
+	sort.Strings(cleaned)
+
+	kept := make([]string, 0, len(cleaned))
+	for i, candidate := range cleaned {
+		redundant := false
+		for j, other := range cleaned {
+			if i == j {
+				continue
+			}
+			if isAncestorLogicalPath(candidate, other) {
+				redundant = true
+				break
+			}
+		}
+		if !redundant {
+			kept = append(kept, candidate)
+		}
+	}
+	return kept
+}
+
+func isAncestorLogicalPath(ancestor, descendant string) bool {
+	ancestor = strings.TrimSuffix(path.Clean(ancestor), "/")
+	descendant = path.Clean(descendant)
+	if ancestor == "" || ancestor == "." || ancestor == descendant {
+		return false
+	}
+	return strings.HasPrefix(descendant, ancestor+"/")
 }
 
 func firstComponentPropertyValue(comp cdx.Component, name string) string {
