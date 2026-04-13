@@ -470,18 +470,21 @@ extract-sbom only extracts when Syft cannot see through a container format.
 // ExtractionNode is the central processing data structure.
 // Each node represents a container artifact encountered during traversal.
 type ExtractionNode struct {
-  Path          string         // physical artifact path relative to delivery root
+    Path          string         // physical artifact path relative to delivery root
+    OriginalPath  string         // absolute filesystem path of the original file
     Format        identify.FormatInfo
-    Status        ExtractionStatus // SyftNative, Extracted, Skipped, Failed, SecurityBlocked
+    Status        ExtractionStatus // pending, syft-native, extracted, skipped, failed, security-blocked, tool-missing
     StatusDetail  string
     ExtractedDir  string         // filesystem path of extracted contents (empty if SyftNative)
     Children      []*ExtractionNode
     Metadata      *ContainerMetadata // non-nil for formats with structured metadata (MSI)
+    InstallerHint string         // installer-semantic enrichment hint (when available)
     Tool          string         // "archive/zip" | "archive/tar" | "7zz" | "unshield" | "syft"
-    SandboxUsed   string         // "bwrap" | "passthrough" | ""
+    SandboxUsed   string         // sandbox mechanism used for external tools
     Duration      time.Duration
     EntriesCount  int
     TotalSize     int64
+    ExtensionFilteredPaths []string // direct-child paths excluded by SkipExtensions
 }
 
 // ContainerMetadata holds structured product information extracted from
@@ -499,6 +502,15 @@ type ContainerMetadata struct {
 // Returns the root of the extraction tree.
 func Extract(ctx context.Context, inputPath string, cfg config.Config, sandbox sandbox.Sandbox) (*ExtractionNode, error)
 ```
+
+**Implementation layout (maintainability):**
+
+- `extract.go`: package-level extraction model overview
+- `types.go`: extraction statuses and node metadata structures
+- `extract_flow.go`: recursive traversal, status assignment order, policy handling
+- `extract_inprocess.go`: ZIP/TAR extractors and in-process safeguard checks
+- `extract_external.go`: sandboxed `7zz`/`unshield` integration and tool lookup
+- `msi.go`: direct MSI metadata parsing (`_StringPool`, `_StringData`, `Property`)
 
 **Syft-first dispatch logic:**
 
@@ -585,6 +597,16 @@ func ScanAll(ctx context.Context, root *extract.ExtractionNode, cfg config.Confi
 
 func FlattenEvidencePaths(result ScanResult) []string
 ```
+
+**Implementation layout (current):**
+
+- `scan.go` provides package-level overview and responsibility map.
+- `types.go` defines shared scan types and package-level synchronization state.
+- `scan_flow.go` contains tree traversal, target partitioning, and phase orchestration (`ScanAll`).
+- `scan_parallel.go` implements worker scheduling, cancellation-aware execution, and progress aggregation.
+- `scan_reuse.go` handles package-to-node ownership matching and syft-native result reuse.
+- `scan_syft.go` encapsulates direct Syft invocation and Syft→CycloneDX conversion.
+- `evidence.go` derives deterministic evidence paths and exposes evidence flattening helpers.
 
 **Current scan flow:**
 
