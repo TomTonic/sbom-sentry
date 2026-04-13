@@ -206,8 +206,12 @@ func syftLocationPath(comp cdx.Component) string {
 }
 
 func componentDeliveryPath(node *extract.ExtractionNode, comp cdx.Component) string {
+	if node == nil {
+		return ""
+	}
+
 	deliveryPath := node.Path
-	if node != nil && node.Status == extract.StatusExtracted {
+	if node.Status == extract.StatusExtracted {
 		if loc := syftLocationPath(comp); loc != "" {
 			deliveryPath = node.Path + "/" + strings.TrimPrefix(loc, "/")
 		}
@@ -225,7 +229,7 @@ func normalizeScanComponents(node *extract.ExtractionNode, sr *scan.ScanResult) 
 	for i := range *sr.BOM.Components {
 		comp := (*sr.BOM.Components)[i]
 		deliveryPath := componentDeliveryPath(node, comp)
-		foundBy := firstComponentPropertyValue(comp, "syft:package:foundBy")
+		foundBy := firstComponentFoundByPropertyValue(comp)
 		if isFileCatalogerArtifact(comp) {
 			suppressions = append(suppressions, SuppressionRecord{
 				Reason:       SuppressionFSArtifact,
@@ -548,12 +552,12 @@ func isLowValueFileArtifact(comp cdx.Component, foundBy string) bool {
 	return comp.PackageURL == "" && comp.Version == "" && foundBy == ""
 }
 
-func firstComponentPropertyValue(comp cdx.Component, name string) string {
+func firstComponentFoundByPropertyValue(comp cdx.Component) string {
 	if comp.Properties == nil {
 		return ""
 	}
 	for _, prop := range *comp.Properties {
-		if prop.Name == name && prop.Value != "" {
+		if prop.Name == "syft:package:foundBy" && prop.Value != "" {
 			return prop.Value
 		}
 	}
@@ -624,10 +628,10 @@ func deduplicateGlobalComponents(components []cdx.Component, dependencies []cdx.
 			suppressions = append(suppressions, SuppressionRecord{
 				Reason:       SuppressionPURLDuplicate,
 				Component:    components[idx],
-				FoundBy:      firstComponentPropertyValue(components[idx], "syft:package:foundBy"),
+				FoundBy:      firstComponentFoundByPropertyValue(components[idx]),
 				DeliveryPath: dp,
 				KeptName:     best.Name,
-				KeptFoundBy:  firstComponentPropertyValue(*best, "syft:package:foundBy"),
+				KeptFoundBy:  firstComponentFoundByPropertyValue(*best),
 			})
 		}
 	}
@@ -814,7 +818,7 @@ func globalQualityScore(comp cdx.Component) int {
 	if comp.PackageURL != "" {
 		score += 4
 	}
-	foundBy := firstComponentPropertyValue(comp, "syft:package:foundBy")
+	foundBy := firstComponentFoundByPropertyValue(comp)
 	if foundBy != "" {
 		score += 3
 	}

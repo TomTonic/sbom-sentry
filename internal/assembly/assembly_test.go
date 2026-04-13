@@ -148,6 +148,17 @@ func TestAssembleIncludesGeneratorVersionInMetadata(t *testing.T) {
 	}
 }
 
+// TestComponentDeliveryPathHandlesNilNode verifies that delivery path
+// derivation remains defensive when no extraction node context exists.
+func TestComponentDeliveryPathHandlesNilNode(t *testing.T) {
+	t.Parallel()
+
+	comp := cdx.Component{Name: "demo"}
+	if got := componentDeliveryPath(nil, comp); got != "" {
+		t.Fatalf("componentDeliveryPath(nil, comp) = %q, want empty", got)
+	}
+}
+
 // TestAssembleNestedScenarioBuildsDependencyGraph verifies a realistic nested
 // container chain with merged scan results: CAB -> TAR -> ZIP -> JAR -> package.
 func TestAssembleNestedScenarioBuildsDependencyGraph(t *testing.T) {
