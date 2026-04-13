@@ -21,6 +21,9 @@ independent of the functional design in DESIGN.md.
 
 ## 2. Code Style and Quality
 
+- Go source files should be small, cohesive, and responsibility-focused
+- Target: ≤ 400 LOC for ~85% of files
+- More than 600 LOC is a strong indicator for splitting
 - Follow standard Go conventions (`gofmt`, `go vet`)
 - Use `golangci-lint` with a project configuration
 - Keep functions focused and reasonably small
