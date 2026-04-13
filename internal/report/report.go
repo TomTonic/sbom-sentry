@@ -876,7 +876,8 @@ func writeProcessingIssues(w io.Writer, data ReportData, ext extractionStats, sc
 	entries := collectProcessingEntries(data)
 
 	fmt.Fprintf(w, "- pipeline: %d\n", len(data.ProcessingIssues))
-	fmt.Fprintf(w, "- extraction-failed: %d\n", ext.Failed+ext.SecurityBlocked)
+	fmt.Fprintf(w, "- extraction-failed: %d\n", ext.Failed)
+	fmt.Fprintf(w, "- extraction-security-blocked: %d\n", ext.SecurityBlocked)
 	fmt.Fprintf(w, "- extraction-tool-missing: %d\n", ext.ToolMissing)
 	fmt.Fprintf(w, "- scan-errors: %d\n", scn.Errors)
 
