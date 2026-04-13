@@ -149,29 +149,33 @@ type processingEntry struct {
 type reportSection struct {
 	title  string
 	anchor string
+	level  int // 0 = main section (##), 1 = subsection (###), 2 = sub-subsection (####)
 }
 
 const (
 	scanApproachGitHubURL = "https://github.com/TomTonic/extract-sbom/blob/main/SCAN_APPROACH.md"
 
-	anchorHowToUse              = "how-to-use-this-report"
-	anchorMethodOverview        = "method-at-a-glance"
-	anchorAppendix              = "appendix"
-	anchorInputFile             = "input-file"
-	anchorConfig                = "configuration"
-	anchorExtensionFilter       = "extension-filter"
-	anchorRootMetadata          = "root-sbom-metadata"
-	anchorSandbox               = "sandbox-configuration"
-	anchorSummary               = "summary"
-	anchorProcessingErrors      = "processing-errors"
-	anchorResidualRisk          = "residual-risk-and-limitations"
-	anchorPolicy                = "policy-decisions"
-	anchorComponentIndex        = "component-occurrence-index"
-	anchorComponentsWithPURL    = "components-with-purl"
-	anchorComponentsWithoutPURL = "components-without-purl"
-	anchorSuppression           = "component-normalization"
-	anchorScan                  = "scan-results"
-	anchorExtraction            = "extraction-log"
+	anchorHowToUse               = "how-to-use-this-report"
+	anchorMethodOverview         = "method-at-a-glance"
+	anchorAppendix               = "appendix"
+	anchorInputFile              = "input-file"
+	anchorConfig                 = "configuration"
+	anchorExtensionFilter        = "extension-filter"
+	anchorRootMetadata           = "root-sbom-metadata"
+	anchorSandbox                = "sandbox-configuration"
+	anchorSummary                = "summary"
+	anchorProcessingErrors       = "processing-errors"
+	anchorResidualRisk           = "residual-risk-and-limitations"
+	anchorPolicy                 = "policy-decisions"
+	anchorComponentIndex         = "component-occurrence-index"
+	anchorComponentsWithPURL     = "components-with-purl"
+	anchorComponentsWithoutPURL  = "components-without-purl"
+	anchorSuppression            = "component-normalization"
+	anchorSuppressionFSArtifacts = "suppression-fs-artifacts"
+	anchorSuppressionLowValue    = "suppression-low-value-file-artifacts"
+	anchorScan                   = "scan-results"
+	anchorScanNoPackageIDs       = "scan-tasks-without-package-identities"
+	anchorExtraction             = "extraction-log"
 )
 
 // ComputeInputSummary computes the file hashes and metadata for the input file.
@@ -263,7 +267,7 @@ func GenerateHuman(data ReportData, lang string, w io.Writer) error {
 	fmt.Fprintln(w)
 
 	writeSectionHeading(w, t.componentNormalizationSection, anchorSuppression)
-	writeSuppressionReport(w, data.Suppressions, t)
+	writeSuppressionReport(w, data.Suppressions, data.BOM, t)
 	fmt.Fprintln(w)
 
 	// Input identification.
@@ -337,6 +341,8 @@ func GenerateHuman(data ReportData, lang string, w io.Writer) error {
 			fmt.Fprintf(w, "- **%s**: %s\n", sr.NodePath, t.noComponents)
 		}
 	}
+	fmt.Fprintln(w)
+	writeScanNoPackageIdentitiesSubsection(w, scnStats, t)
 	fmt.Fprintln(w)
 
 	// Extraction log.
@@ -556,6 +562,9 @@ type translations struct {
 	scanSection                      string
 	scanSectionLead                  string
 	scanTaskEvidenceLabel            string
+	scanNoPackageIDsSection          string
+	scanNoPackageIDsLead             string
+	noScanNoPackageIDs               string
 	policySection                    string
 	summarySection                   string
 	residualRiskSection              string
@@ -611,6 +620,7 @@ type translations struct {
 	residualRiskEvidenceCoverage     string
 	residualRiskNoComponentTasks     string
 	residualRiskFileArtifactCoverage string
+	residualRiskExtensionFilter      string
 	residualRiskExtractionGap        string
 	residualRiskToolGap              string
 	residualRiskScanGap              string
@@ -712,7 +722,10 @@ func getTranslations(lang string) translations {
 			componentsFound:                  "Komponenten gefunden",
 			noComponents:                     "keine Komponenten gefunden",
 			scanSectionLead:                  "Dies ist das Protokoll der einzelnen Scan-Aufgaben. Die hier aufgeführten Evidenzpfade sind task-bezogene Beobachtungen und können mehrere finale Komponenten abdecken. Die maßgebliche komponentenspezifische Evidenz steht im Komponentenindex.",
-			scanTaskEvidenceLabel:            "Im Scan beobachtete Evidenz",
+			scanTaskEvidenceLabel:            "evidence-path",
+			scanNoPackageIDsSection:          "Scan-Aufgaben ohne Paketidentität",
+			scanNoPackageIDsLead:             "%d erfolgreiche Scan-Aufgaben lieferten keine Paketidentität. Die vollständige Liste für die Nachvollziehbarkeit steht unten:",
+			noScanNoPackageIDs:               "In diesem Lauf gab es keine Scan-Aufgaben ohne Paketidentität.",
 			deliveryPath:                     "Lieferpfad",
 			status:                           "Status",
 			tool:                             "Werkzeug",
@@ -726,6 +739,7 @@ func getTranslations(lang string) translations {
 			residualRiskEvidenceCoverage:     "%d indexierte Vorkommen haben einen konkreten Evidenzpfad. %d stützen sich nur auf einen allgemeinen Evidenzhinweis, und %d haben keine zusätzliche Evidenzangabe über den Komponenten-Datensatz hinaus.",
 			residualRiskNoComponentTasks:     "%d von %d erfolgreichen Scan-Aufgaben lieferten keine Paketidentität. Das bedeutet: Der Inhalt wurde gesehen, aber es war keine verwertbare Paketmetadaten-Evidenz vorhanden. Beispielaufgaben: %s.",
 			residualRiskFileArtifactCoverage: "Syft erzeugte außerdem %d dateibezogene Rohfunde ohne belastbare Paketkoordinaten. Diese Einträge dokumentieren beobachtete Dateien, eignen sich aber nicht als eigenständige Grundlage für CVE-Abgleiche und werden deshalb nicht als Paketbefund geführt.",
+			residualRiskExtensionFilter:      "Der Dateiendungsfilter schloss %d Dateien von der Untersuchung aus; diese Dateien sind nicht im Komponentenbestand enthalten. Details: %s.",
 			residualRiskExtractionGap:        "%d Extraktionsknoten konnten nicht vollständig verarbeitet werden. Beispiele: %s.",
 			residualRiskToolGap:              "%d Extraktionsknoten erfordern nicht verfügbare Hilfswerkzeuge. Beispiele: %s.",
 			residualRiskScanGap:              "%d Scan-Aufgaben schlugen fehl. Beispiele: %s.",
@@ -824,7 +838,10 @@ func getTranslations(lang string) translations {
 			componentsFound:                  "components found",
 			noComponents:                     "no components found",
 			scanSectionLead:                  "This is a per-scan-task execution log. Evidence lines in this section are task-level observations and may cover several final components. The authoritative per-component evidence statements are in the Component Occurrence Index.",
-			scanTaskEvidenceLabel:            "Observed evidence",
+			scanTaskEvidenceLabel:            "evidence-path",
+			scanNoPackageIDsSection:          "Scan Tasks Without Package Identities",
+			scanNoPackageIDsLead:             "%d successful scan tasks produced no package identities. The complete list for audit traceability is shown below:",
+			noScanNoPackageIDs:               "No scan tasks without package identities were observed in this run.",
 			deliveryPath:                     "Delivery path",
 			status:                           "Status",
 			tool:                             "Tool",
@@ -838,6 +855,7 @@ func getTranslations(lang string) translations {
 			residualRiskEvidenceCoverage:     "%d indexed occurrences carry a concrete evidence path. %d rely only on a generic evidence-source statement, and %d have no additional evidence detail beyond the component record.",
 			residualRiskNoComponentTasks:     "%d of %d successful scan tasks produced no package identities. This means the content was seen, but no usable package metadata was present. Example tasks: %s.",
 			residualRiskFileArtifactCoverage: "Syft also emitted %d file-level records without actionable package coordinates. These records show that files were observed, but they do not by themselves support CVE matching and are therefore not listed as package findings.",
+			residualRiskExtensionFilter:      "The extension filter excluded %d files from examination; these files are not reflected in the component inventory. Details: %s.",
 			residualRiskExtractionGap:        "%d extraction nodes could not be processed completely. Examples: %s.",
 			residualRiskToolGap:              "%d extraction nodes require unavailable helper tools. Examples: %s.",
 			residualRiskScanGap:              "%d scan tasks failed. Examples: %s.",
@@ -926,22 +944,25 @@ func writeRootMetadata(w io.Writer, data ReportData, t translations) {
 
 func reportSections(t translations) []reportSection {
 	return []reportSection{
-		{title: t.summarySection, anchor: anchorSummary},
-		{title: t.howToUseSection, anchor: anchorHowToUse},
-		{title: t.methodOverviewSection, anchor: anchorMethodOverview},
-		{title: t.processingIssuesSection, anchor: anchorProcessingErrors},
-		{title: t.residualRiskSection, anchor: anchorResidualRisk},
-		{title: t.appendixSection, anchor: anchorAppendix},
-		{title: t.componentIndexSection, anchor: anchorComponentIndex},
-		{title: t.componentNormalizationSection, anchor: anchorSuppression},
-		{title: t.inputSection, anchor: anchorInputFile},
-		{title: t.configSection, anchor: anchorConfig},
-		{title: t.extensionFilterSection, anchor: anchorExtensionFilter},
-		{title: t.rootMetadataSection, anchor: anchorRootMetadata},
-		{title: t.sandboxSection, anchor: anchorSandbox},
-		{title: t.policySection, anchor: anchorPolicy},
-		{title: t.scanSection, anchor: anchorScan},
-		{title: t.extractionSection, anchor: anchorExtraction},
+		{title: t.summarySection, anchor: anchorSummary, level: 0},
+		{title: t.howToUseSection, anchor: anchorHowToUse, level: 0},
+		{title: t.methodOverviewSection, anchor: anchorMethodOverview, level: 0},
+		{title: t.processingIssuesSection, anchor: anchorProcessingErrors, level: 0},
+		{title: t.residualRiskSection, anchor: anchorResidualRisk, level: 0},
+		{title: t.appendixSection, anchor: anchorAppendix, level: 0},
+		{title: t.componentIndexSection, anchor: anchorComponentIndex, level: 1},
+		{title: t.componentNormalizationSection, anchor: anchorSuppression, level: 1},
+		{title: t.suppressionReasonFSArtifact, anchor: anchorSuppressionFSArtifacts, level: 2},
+		{title: t.suppressionReasonLowValueFile, anchor: anchorSuppressionLowValue, level: 2},
+		{title: t.inputSection, anchor: anchorInputFile, level: 1},
+		{title: t.configSection, anchor: anchorConfig, level: 1},
+		{title: t.extensionFilterSection, anchor: anchorExtensionFilter, level: 1},
+		{title: t.rootMetadataSection, anchor: anchorRootMetadata, level: 1},
+		{title: t.sandboxSection, anchor: anchorSandbox, level: 1},
+		{title: t.policySection, anchor: anchorPolicy, level: 1},
+		{title: t.scanSection, anchor: anchorScan, level: 1},
+		{title: t.scanNoPackageIDsSection, anchor: anchorScanNoPackageIDs, level: 1},
+		{title: t.extractionSection, anchor: anchorExtraction, level: 1},
 	}
 }
 
@@ -951,7 +972,11 @@ func writeSectionHeading(w io.Writer, title, anchor string) {
 
 func writeTableOfContents(w io.Writer, sections []reportSection) {
 	for _, section := range sections {
-		fmt.Fprintf(w, "- [%s](#%s)\n", section.title, section.anchor)
+		indent := ""
+		for i := 0; i < section.level; i++ {
+			indent += "  "
+		}
+		fmt.Fprintf(w, "%s- [%s](#%s)\n", indent, section.title, section.anchor)
 	}
 }
 
@@ -1227,12 +1252,11 @@ func escapeMarkdownCell(value string) string {
 	return value
 }
 
-func writeSuppressionReport(w io.Writer, suppressions []assembly.SuppressionRecord, t translations) {
+func writeSuppressionReport(w io.Writer, suppressions []assembly.SuppressionRecord, bom *cdx.BOM, t translations) {
 	fmt.Fprintf(w, "%s\n\n", t.componentNormalizationLead)
 
 	if len(suppressions) == 0 {
-		fmt.Fprintf(w, "- %s\n", t.noSuppressions)
-		return
+		fmt.Fprintf(w, "- %s\n\n", t.noSuppressions)
 	}
 
 	// Group by reason for a structured overview.
@@ -1249,6 +1273,12 @@ func writeSuppressionReport(w io.Writer, suppressions []assembly.SuppressionReco
 			purlDups = append(purlDups, suppressions[i])
 		}
 	}
+	sortSuppressionRecords(fsArtifacts)
+	sortSuppressionRecords(lowValue)
+	sortSuppressionRecords(weakDups)
+	sortSuppressionRecords(purlDups)
+
+	resolver := newSuppressionLinkResolver(bom)
 
 	// Summary counts.
 	fmt.Fprintf(w, "| %s | Count |\n", "Reason")
@@ -1260,100 +1290,232 @@ func writeSuppressionReport(w io.Writer, suppressions []assembly.SuppressionReco
 	fmt.Fprintln(w)
 
 	// FS-cataloger artifacts.
-	if len(fsArtifacts) > 0 {
-		fmt.Fprintf(w, "#### %s (%d)\n\n", t.suppressionReasonFSArtifact, len(fsArtifacts))
-		fmt.Fprintln(w, "Operational meaning: these are file-level Syft records, not retained package findings. They normally require no action during vulnerability triage. They are listed here only so the normalization step remains auditable.")
-		fmt.Fprintln(w)
-		fmt.Fprintln(w, "When a package identity exists for the same file, the actionable record is the surviving component in the Component Occurrence Index.")
-		fmt.Fprintln(w)
-		fmt.Fprintln(w, "| Name (suppressed) | Delivery path |")
-		fmt.Fprintln(w, "|---|---|")
-		maxRows := 20
-		for i := range fsArtifacts {
-			if i >= maxRows {
-				fmt.Fprintf(w, "| ... | %d additional entries omitted |\n", len(fsArtifacts)-maxRows)
-				break
-			}
-			r := fsArtifacts[i]
-			fmt.Fprintf(w, "| `%s` | `%s` |\n",
-				escapeMarkdownCell(r.Component.Name),
-				escapeMarkdownCell(r.DeliveryPath))
-		}
-		fmt.Fprintln(w)
-	}
+	fmt.Fprintf(w, "<a id=\"%s\"></a>\n\n", anchorSuppressionFSArtifacts)
+	fmt.Fprintf(w, "#### %s (%d)\n\n", t.suppressionReasonFSArtifact, len(fsArtifacts))
+	fmt.Fprintln(w, "Operational meaning: these are file-level Syft records, not retained package findings. They normally require no action during vulnerability triage. They are listed here only so the normalization step remains auditable.")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "When a package identity exists for the same file, the actionable record is the surviving component in the Component Occurrence Index.")
+	fmt.Fprintln(w)
+	writeSuppressionReasonTable(w, fsArtifacts, resolver)
 
 	// Low-value file artifacts.
-	if len(lowValue) > 0 {
-		fmt.Fprintf(w, "#### %s (%d)\n\n", t.suppressionReasonLowValueFile, len(lowValue))
-		fmt.Fprintln(w, "Operational meaning: these raw file records had no PURL, no version, and no identifying cataloger metadata. They do not support package-level CVE correlation and are therefore excluded from the SBOM package view.")
-		fmt.Fprintln(w)
-		fmt.Fprintln(w, "| Name (suppressed) | Delivery path |")
-		fmt.Fprintln(w, "|---|---|")
-		maxRows := 20
-		for i := range lowValue {
-			if i >= maxRows {
-				fmt.Fprintf(w, "| ... | %d additional entries omitted |\n", len(lowValue)-maxRows)
-				break
-			}
-			r := lowValue[i]
-			fmt.Fprintf(w, "| `%s` | `%s` |\n",
-				escapeMarkdownCell(r.Component.Name),
-				escapeMarkdownCell(r.DeliveryPath))
-		}
-		fmt.Fprintln(w)
-	}
+	fmt.Fprintf(w, "<a id=\"%s\"></a>\n\n", anchorSuppressionLowValue)
+	fmt.Fprintf(w, "#### %s (%d)\n\n", t.suppressionReasonLowValueFile, len(lowValue))
+	fmt.Fprintln(w, "Operational meaning: these raw file records had no PURL, no version, and no identifying cataloger metadata. They do not support package-level CVE correlation and are therefore excluded from the SBOM package view.")
+	fmt.Fprintln(w)
+	writeSuppressionReasonTable(w, lowValue, resolver)
 
 	// Weak duplicates.
-	if len(weakDups) > 0 {
-		fmt.Fprintf(w, "#### %s (%d)\n\n", t.suppressionReasonWeakDuplicate, len(weakDups))
-		fmt.Fprintln(w, "Operational meaning: at the same delivery/evidence locus a stronger package record existed. The weaker placeholder was removed so that the final SBOM keeps the more attributable identity.")
-		fmt.Fprintln(w)
-		fmt.Fprintln(w, "| Name (suppressed) | Delivery path | "+t.suppressionReplacedBy+" |")
-		fmt.Fprintln(w, "|---|---|---|")
-		maxRows := 20
-		for i := range weakDups {
-			if i >= maxRows {
-				fmt.Fprintf(w, "| ... | ... | %d additional entries omitted |\n", len(weakDups)-maxRows)
-				break
-			}
-			r := weakDups[i]
-			keptBy := r.KeptName
-			if r.KeptFoundBy != "" {
-				keptBy += " (" + r.KeptFoundBy + ")"
-			}
-			fmt.Fprintf(w, "| `%s` | `%s` | `%s` |\n",
-				escapeMarkdownCell(r.Component.Name),
-				escapeMarkdownCell(r.DeliveryPath),
-				escapeMarkdownCell(keptBy))
-		}
-		fmt.Fprintln(w)
-	}
+	fmt.Fprintf(w, "#### %s (%d)\n\n", t.suppressionReasonWeakDuplicate, len(weakDups))
+	fmt.Fprintln(w, "Operational meaning: at the same delivery/evidence locus a stronger package record existed. The weaker placeholder was removed so that the final SBOM keeps the more attributable identity.")
+	fmt.Fprintln(w)
+	writeSuppressionReasonTable(w, weakDups, resolver)
 
 	// PURL duplicates across scan nodes or evidence variants.
-	if len(purlDups) > 0 {
-		fmt.Fprintf(w, "#### %s (%d)\n\n", t.suppressionReasonPURLDuplicate, len(purlDups))
-		fmt.Fprintln(w, "Operational meaning: several raw observations described the same package identity. One representative was kept, and the surviving component in the Component Occurrence Index carries the retained leaf-most delivery and evidence paths. Use this table only when you need to audit why duplicate raw observations collapsed into one package component.")
+	fmt.Fprintf(w, "#### %s (%d)\n\n", t.suppressionReasonPURLDuplicate, len(purlDups))
+	fmt.Fprintln(w, "Operational meaning: several raw observations described the same package identity. One representative was kept, and the surviving component in the Component Occurrence Index carries the retained leaf-most delivery and evidence paths. Use this table only when you need to audit why duplicate raw observations collapsed into one package component.")
+	fmt.Fprintln(w)
+	writeSuppressionReasonTable(w, purlDups, resolver)
+}
+
+func writeSuppressionReasonTable(w io.Writer, records []assembly.SuppressionRecord, resolver suppressionLinkResolver) {
+	fmt.Fprintln(w, "| Delivery path | Suppressed component name | Suppressed by |")
+	fmt.Fprintln(w, "|---|---|---|")
+	if len(records) == 0 {
+		fmt.Fprintln(w, "| - | - | - |")
 		fmt.Fprintln(w)
-		fmt.Fprintln(w, "| Name (suppressed) | Delivery path | "+t.suppressionReplacedBy+" |")
-		fmt.Fprintln(w, "|---|---|---|")
-		maxRows := 20
-		for i := range purlDups {
-			if i >= maxRows {
-				fmt.Fprintf(w, "| ... | ... | %d additional entries omitted |\n", len(purlDups)-maxRows)
-				break
-			}
-			r := purlDups[i]
-			keptBy := r.KeptName
-			if r.KeptFoundBy != "" {
-				keptBy = keptBy + " (`" + escapeMarkdownCell(r.KeptFoundBy) + "`)"
-			}
-			fmt.Fprintf(w, "| `%s` | `%s` | %s |\n",
-				escapeMarkdownCell(r.Component.Name),
-				escapeMarkdownCell(r.DeliveryPath),
-				escapeMarkdownCell(keptBy))
-		}
-		fmt.Fprintln(w)
+		return
 	}
+
+	const maxRows = 30
+	for i := range records {
+		if i >= maxRows {
+			fmt.Fprintf(w, "| ... | ... | %d additional entries omitted |\n", len(records)-maxRows)
+			break
+		}
+		r := records[i]
+		suppressedName := r.Component.Name
+		if suppressedName == "" {
+			suppressedName = "-"
+		}
+		fmt.Fprintf(w, "| `%s` | `%s` | %s |\n",
+			escapeMarkdownCell(r.DeliveryPath),
+			escapeMarkdownCell(suppressedName),
+			suppressedByCell(r, resolver),
+		)
+	}
+	fmt.Fprintln(w)
+}
+
+type suppressionLinkCandidate struct {
+	BOMRef  string
+	Name    string
+	FoundBy string
+	Score   int
+}
+
+type suppressionLinkResolver struct {
+	byDeliveryPath map[string][]suppressionLinkCandidate
+}
+
+func newSuppressionLinkResolver(bom *cdx.BOM) suppressionLinkResolver {
+	resolver := suppressionLinkResolver{byDeliveryPath: map[string][]suppressionLinkCandidate{}}
+	if bom == nil || bom.Components == nil {
+		return resolver
+	}
+
+	for i := range *bom.Components {
+		comp := (*bom.Components)[i]
+		if comp.BOMRef == "" {
+			continue
+		}
+		candidate := suppressionLinkCandidate{
+			BOMRef:  comp.BOMRef,
+			Name:    comp.Name,
+			FoundBy: firstComponentPropertyValue(comp, "syft:package:foundBy"),
+			Score:   suppressionLinkCandidateScore(comp),
+		}
+		for _, deliveryPath := range componentPropertyValues(comp, "extract-sbom:delivery-path") {
+			resolver.byDeliveryPath[deliveryPath] = append(resolver.byDeliveryPath[deliveryPath], candidate)
+		}
+	}
+
+	for deliveryPath := range resolver.byDeliveryPath {
+		sort.Slice(resolver.byDeliveryPath[deliveryPath], func(i, j int) bool {
+			a := resolver.byDeliveryPath[deliveryPath][i]
+			b := resolver.byDeliveryPath[deliveryPath][j]
+			if a.Score != b.Score {
+				return a.Score > b.Score
+			}
+			if a.Name != b.Name {
+				return a.Name < b.Name
+			}
+			if a.FoundBy != b.FoundBy {
+				return a.FoundBy < b.FoundBy
+			}
+			return a.BOMRef < b.BOMRef
+		})
+	}
+
+	return resolver
+}
+
+func suppressionLinkCandidateScore(comp cdx.Component) int {
+	score := 0
+	if comp.PackageURL != "" {
+		score += 4
+	}
+	if comp.Version != "" {
+		score += 2
+	}
+	if firstComponentPropertyValue(comp, "syft:package:foundBy") != "" {
+		score += 2
+	}
+	if comp.Type != cdx.ComponentTypeFile {
+		score++
+	}
+	return score
+}
+
+func (r suppressionLinkResolver) resolve(record assembly.SuppressionRecord) string {
+	candidates := r.byDeliveryPath[record.DeliveryPath]
+	if len(candidates) == 0 {
+		return ""
+	}
+
+	if record.KeptName != "" {
+		for i := range candidates {
+			candidate := candidates[i]
+			if candidate.Name != record.KeptName {
+				continue
+			}
+			if record.KeptFoundBy != "" && candidate.FoundBy != record.KeptFoundBy {
+				continue
+			}
+			return candidate.BOMRef
+		}
+	}
+
+	return candidates[0].BOMRef
+}
+
+func suppressedByCell(record assembly.SuppressionRecord, resolver suppressionLinkResolver) string {
+	bomRef := resolver.resolve(record)
+	if bomRef == "" {
+		return "-"
+	}
+	return fmt.Sprintf("[%s](#%s)", escapeMarkdownCell(bomRef), occurrenceAnchorID(bomRef))
+}
+
+func sortSuppressionRecords(records []assembly.SuppressionRecord) {
+	sort.Slice(records, func(i, j int) bool {
+		if records[i].DeliveryPath != records[j].DeliveryPath {
+			return records[i].DeliveryPath < records[j].DeliveryPath
+		}
+		if records[i].Component.Name != records[j].Component.Name {
+			return records[i].Component.Name < records[j].Component.Name
+		}
+		if records[i].KeptName != records[j].KeptName {
+			return records[i].KeptName < records[j].KeptName
+		}
+		return records[i].Component.BOMRef < records[j].Component.BOMRef
+	})
+}
+
+func occurrenceAnchorID(objectID string) string {
+	if objectID == "" {
+		return "component-occurrence"
+	}
+
+	var b strings.Builder
+	b.WriteString("component-")
+	for _, r := range strings.ToLower(objectID) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			b.WriteRune(r)
+			continue
+		}
+		b.WriteByte('-')
+	}
+	return strings.TrimRight(b.String(), "-")
+}
+
+func writeScanNoPackageIdentitiesSubsection(w io.Writer, scn scanStats, t translations) {
+	fmt.Fprintf(w, "<a id=\"%s\"></a>\n\n### %s\n\n", anchorScanNoPackageIDs, t.scanNoPackageIDsSection)
+	if scn.NoComponentTasks == 0 {
+		fmt.Fprintf(w, "- %s\n", t.noScanNoPackageIDs)
+		return
+	}
+
+	paths := uniqueSortedPaths(scn.NoComponentPaths)
+	fmt.Fprintf(w, "%s\n\n", fmt.Sprintf(t.scanNoPackageIDsLead, len(paths)))
+	const maxRows = 300
+	for i, p := range paths {
+		if i >= maxRows {
+			fmt.Fprintf(w, "- ... (%d additional entries omitted)\n", len(paths)-maxRows)
+			break
+		}
+		fmt.Fprintf(w, "- `%s`\n", p)
+	}
+}
+
+func uniqueSortedPaths(paths []string) []string {
+	if len(paths) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(paths))
+	unique := make([]string, 0, len(paths))
+	for _, p := range paths {
+		if p == "" {
+			continue
+		}
+		if _, ok := seen[p]; ok {
+			continue
+		}
+		seen[p] = struct{}{}
+		unique = append(unique, p)
+	}
+	sort.Strings(unique)
+	return unique
 }
 
 func writeExtensionFilterSection(w io.Writer, data ReportData, ext extractionStats, t translations) {
@@ -1430,6 +1592,7 @@ func writeComponentOccurrenceIndex(w io.Writer, occurrences []componentOccurrenc
 }
 
 func writeOccurrenceEntry(w io.Writer, occ componentOccurrence, t translations) {
+	fmt.Fprintf(w, "<a id=\"%s\"></a>\n\n", occurrenceAnchorID(occ.ObjectID))
 	fmt.Fprintf(w, "### %s\n\n", occ.ObjectID)
 	fmt.Fprintf(w, "- %s: `%s`\n", t.packageName, occ.PackageName)
 	if occ.Version != "" {
@@ -1822,20 +1985,28 @@ func writeResidualRisk(w io.Writer, data ReportData, ext extractionStats, scn sc
 	if scn.Successful > 0 {
 		fmt.Fprintf(w, "- %s %s\n",
 			fmt.Sprintf(t.residualRiskNoComponentTasks, scn.NoComponentTasks, scn.Successful, samplePaths(scn.NoComponentPaths, 3)),
-			sectionLink(t.scanSection, anchorScan))
+			sectionLink(t.scanNoPackageIDsSection, anchorScanNoPackageIDs))
 	}
 	suppression := collectSuppressionStats(data.Suppressions)
 	fileArtifactCount := suppression.FSArtifacts + suppression.LowValueFiles
 	if fileArtifactCount > 0 {
+		links := make([]string, 0, 2)
+		if suppression.FSArtifacts > 0 {
+			links = append(links, sectionLink(t.suppressionReasonFSArtifact, anchorSuppressionFSArtifacts))
+		}
+		if suppression.LowValueFiles > 0 {
+			links = append(links, sectionLink(t.suppressionReasonLowValueFile, anchorSuppressionLowValue))
+		}
 		fmt.Fprintf(w, "- %s %s\n",
 			fmt.Sprintf(t.residualRiskFileArtifactCoverage, fileArtifactCount),
-			sectionLink(t.componentNormalizationSection, anchorSuppression))
+			strings.Join(links, ", "))
 	}
 	if ext.ExtensionFiltered > 0 {
-		fmt.Fprintf(w, "- %s %d %s [%s](#%s).\n",
-			"Extension filter excluded", ext.ExtensionFiltered,
-			"files from examination; these are not reflected in the component inventory. See",
-			t.extensionFilterSection, anchorExtensionFilter)
+		fmt.Fprintf(w, "- %s\n", fmt.Sprintf(
+			t.residualRiskExtensionFilter,
+			ext.ExtensionFiltered,
+			sectionLink(t.extensionFilterSection, anchorExtensionFilter),
+		))
 	}
 	if ext.Failed > 0 || ext.SecurityBlocked > 0 {
 		fmt.Fprintf(w, "- %s\n", fmt.Sprintf(t.residualRiskExtractionGap, ext.Failed+ext.SecurityBlocked, samplePaths(append(append([]string{}, ext.FailedPaths...), ext.SecurityBlockedPaths...), 3)))
