@@ -275,3 +275,214 @@ func TestLoadConfigReturnsErrorForInvalidExplicitConfig(t *testing.T) {
 		t.Fatal("expected loadConfig to fail for malformed explicit config file")
 	}
 }
+
+func TestLoadConfigRejectsInvalidPolicy(t *testing.T) {
+	dir := t.TempDir()
+	inputPath := filepath.Join(dir, "delivery.zip")
+	if err := os.WriteFile(inputPath, []byte("PK\x03\x04fake"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := rootCmd()
+	if err := cmd.Flags().Set("policy", "bogus"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadConfig(cmd, []string{inputPath}); err == nil {
+		t.Fatal("expected error for invalid policy")
+	}
+}
+
+func TestLoadConfigRejectsInvalidMode(t *testing.T) {
+	dir := t.TempDir()
+	inputPath := filepath.Join(dir, "delivery.zip")
+	if err := os.WriteFile(inputPath, []byte("PK\x03\x04fake"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := rootCmd()
+	if err := cmd.Flags().Set("mode", "bogus"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadConfig(cmd, []string{inputPath}); err == nil {
+		t.Fatal("expected error for invalid mode")
+	}
+}
+
+func TestLoadConfigRejectsInvalidReport(t *testing.T) {
+	dir := t.TempDir()
+	inputPath := filepath.Join(dir, "delivery.zip")
+	if err := os.WriteFile(inputPath, []byte("PK\x03\x04fake"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := rootCmd()
+	if err := cmd.Flags().Set("report", "bogus"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadConfig(cmd, []string{inputPath}); err == nil {
+		t.Fatal("expected error for invalid report mode")
+	}
+}
+
+func TestLoadConfigRejectsInvalidProgress(t *testing.T) {
+	dir := t.TempDir()
+	inputPath := filepath.Join(dir, "delivery.zip")
+	if err := os.WriteFile(inputPath, []byte("PK\x03\x04fake"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := rootCmd()
+	if err := cmd.Flags().Set("progress", "bogus"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadConfig(cmd, []string{inputPath}); err == nil {
+		t.Fatal("expected error for invalid progress level")
+	}
+}
+
+func TestLoadConfigRejectsInvalidTimeout(t *testing.T) {
+	dir := t.TempDir()
+	inputPath := filepath.Join(dir, "delivery.zip")
+	if err := os.WriteFile(inputPath, []byte("PK\x03\x04fake"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := rootCmd()
+	if err := cmd.Flags().Set("timeout", "not-a-duration"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadConfig(cmd, []string{inputPath}); err == nil {
+		t.Fatal("expected error for invalid timeout")
+	}
+}
+
+func TestLoadConfigRejectsInvalidRootProperty(t *testing.T) {
+	dir := t.TempDir()
+	inputPath := filepath.Join(dir, "delivery.zip")
+	if err := os.WriteFile(inputPath, []byte("PK\x03\x04fake"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := rootCmd()
+	if err := cmd.Flags().Set("root-property", "no-equals-sign"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadConfig(cmd, []string{inputPath}); err == nil {
+		t.Fatal("expected error for invalid root-property format")
+	}
+}
+
+func TestLoadConfigSkipExtensions(t *testing.T) {
+	dir := t.TempDir()
+	inputPath := filepath.Join(dir, "delivery.zip")
+	if err := os.WriteFile(inputPath, []byte("PK\x03\x04fake"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	outputDir := filepath.Join(dir, "output")
+	workDir := filepath.Join(dir, "work")
+	if err := os.MkdirAll(outputDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(workDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := rootCmd()
+	if err := cmd.Flags().Set("output-dir", outputDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Flags().Set("work-dir", workDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Flags().Set("skip-extensions", ".docx,.xlsx"); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := loadConfig(cmd, []string{inputPath})
+	if err != nil {
+		t.Fatalf("loadConfig returned error: %v", err)
+	}
+	if len(cfg.SkipExtensions) != 2 {
+		t.Fatalf("SkipExtensions = %v, want 2 elements", cfg.SkipExtensions)
+	}
+}
+
+// TestRootCmdRunEReturnsLoadConfigError verifies that the RunE callback
+// surfaces loadConfig errors rather than proceeding with the pipeline.
+func TestRootCmdRunEReturnsLoadConfigError(t *testing.T) {
+	cmd := rootCmd()
+	// Set an invalid policy value so loadConfig returns an error.
+	if err := cmd.Flags().Set("policy", "bogus"); err != nil {
+		t.Fatal(err)
+	}
+	// Invoke RunE directly.
+	err := cmd.RunE(cmd, []string{"/nonexistent/input.zip"})
+	if err == nil {
+		t.Fatal("expected RunE to return loadConfig error")
+	}
+}
+
+func TestLoadConfigMultipleRootProperties(t *testing.T) {
+	dir := t.TempDir()
+	inputPath := filepath.Join(dir, "delivery.zip")
+	if err := os.WriteFile(inputPath, []byte("PK\x03\x04fake"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outputDir := filepath.Join(dir, "output")
+	workDir := filepath.Join(dir, "work")
+	if err := os.MkdirAll(outputDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(workDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := rootCmd()
+	if err := cmd.Flags().Set("output-dir", outputDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Flags().Set("work-dir", workDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Flags().Set("root-property", "key1=val1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Flags().Set("root-property", "key2=val2"); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := loadConfig(cmd, []string{inputPath})
+	if err != nil {
+		t.Fatalf("loadConfig error: %v", err)
+	}
+	if cfg.RootMetadata.Properties["key1"] != "val1" || cfg.RootMetadata.Properties["key2"] != "val2" {
+		t.Fatalf("properties = %v, want key1=val1 and key2=val2", cfg.RootMetadata.Properties)
+	}
+}
+
+func TestLoadConfigValidTimeout(t *testing.T) {
+	dir := t.TempDir()
+	inputPath := filepath.Join(dir, "delivery.zip")
+	if err := os.WriteFile(inputPath, []byte("PK\x03\x04fake"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outputDir := filepath.Join(dir, "output")
+	workDir := filepath.Join(dir, "work")
+	if err := os.MkdirAll(outputDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(workDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := rootCmd()
+	if err := cmd.Flags().Set("output-dir", outputDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Flags().Set("work-dir", workDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Flags().Set("timeout", "30s"); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := loadConfig(cmd, []string{inputPath})
+	if err != nil {
+		t.Fatalf("loadConfig error: %v", err)
+	}
+	if cfg.Limits.Timeout != 30*time.Second {
+		t.Fatalf("Timeout = %s, want 30s", cfg.Limits.Timeout)
+	}
+}
