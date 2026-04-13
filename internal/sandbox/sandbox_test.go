@@ -46,6 +46,31 @@ func TestPassthroughSandboxRunFailsForMissingCommand(t *testing.T) {
 	}
 }
 
+// TestPassthroughSandboxRunSucceedsWithRealCommand verifies that the
+// passthrough sandbox can successfully execute a simple command.
+// This exercises the success path in PassthroughSandbox.Run.
+func TestPassthroughSandboxRunSucceedsWithRealCommand(t *testing.T) {
+	t.Parallel()
+
+	sb := NewPassthroughSandbox()
+	err := sb.Run(context.Background(), "true", nil, "/tmp/input", "/tmp/output")
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// TestPassthroughSandboxRunReportsNonZeroExit verifies that a command
+// that exits with a non-zero code produces an error.
+func TestPassthroughSandboxRunReportsNonZeroExit(t *testing.T) {
+	t.Parallel()
+
+	sb := NewPassthroughSandbox()
+	err := sb.Run(context.Background(), "false", nil, "/tmp/input", "/tmp/output")
+	if err == nil {
+		t.Error("expected error for non-zero exit, got nil")
+	}
+}
+
 // TestBwrapSandboxNotAvailableOnNonLinux verifies that the Bubblewrap
 // sandbox correctly reports unavailability on non-Linux platforms.
 func TestBwrapSandboxNotAvailableOnNonLinux(t *testing.T) {
