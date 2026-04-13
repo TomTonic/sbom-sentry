@@ -999,8 +999,8 @@ func scanApproachLink(label, anchor string) string {
 
 func collectSuppressionStats(suppressions []assembly.SuppressionRecord) suppressionStats {
 	stats := suppressionStats{}
-	for _, s := range suppressions {
-		switch s.Reason {
+	for i := range suppressions {
+		switch suppressions[i].Reason {
 		case assembly.SuppressionFSArtifact:
 			stats.FSArtifacts++
 		case assembly.SuppressionLowValueFile:
@@ -1126,13 +1126,13 @@ func writeSummary(w io.Writer, data ReportData, ext extractionStats, scn scanSta
 func summarizeFindings(ext extractionStats, scn scanStats, idx componentIndexStats) []string {
 	findings := make([]string, 0, 8)
 	if ext.ToolMissing > 0 {
-		findings = append(findings, fmt.Sprintf("%d extraction nodes require unavailable external tools. Examples: %s.", ext.ToolMissing, samplePaths(ext.ToolMissingPaths, 3)))
+		findings = append(findings, fmt.Sprintf("%d extraction nodes require unavailable external tools. Examples: %s.", ext.ToolMissing, samplePaths(ext.ToolMissingPaths)))
 	}
 	if ext.Failed > 0 || ext.SecurityBlocked > 0 {
-		findings = append(findings, fmt.Sprintf("%d extraction nodes failed or were blocked. Examples: %s.", ext.Failed+ext.SecurityBlocked, samplePaths(append(append([]string{}, ext.FailedPaths...), ext.SecurityBlockedPaths...), 3)))
+		findings = append(findings, fmt.Sprintf("%d extraction nodes failed or were blocked. Examples: %s.", ext.Failed+ext.SecurityBlocked, samplePaths(append(append([]string{}, ext.FailedPaths...), ext.SecurityBlockedPaths...))))
 	}
 	if scn.Errors > 0 {
-		findings = append(findings, fmt.Sprintf("%d Syft scan tasks failed. Examples: %s.", scn.Errors, samplePaths(scn.ErrorPaths, 3)))
+		findings = append(findings, fmt.Sprintf("%d Syft scan tasks failed. Examples: %s.", scn.Errors, samplePaths(scn.ErrorPaths)))
 	} else if scn.Total > 0 {
 		findings = append(findings, fmt.Sprintf("All %d Syft scan tasks completed successfully.", scn.Total))
 	}
@@ -1144,7 +1144,7 @@ func summarizeFindings(ext extractionStats, scn scanStats, idx componentIndexSta
 		))
 	}
 	if scn.NoComponentTasks > 0 {
-		findings = append(findings, fmt.Sprintf("%d successful scan tasks produced no package identities. Examples: %s.", scn.NoComponentTasks, samplePaths(scn.NoComponentPaths, 3)))
+		findings = append(findings, fmt.Sprintf("%d successful scan tasks produced no package identities. Examples: %s.", scn.NoComponentTasks, samplePaths(scn.NoComponentPaths)))
 	}
 	if idx.FilteredAbsolutePathNames > 0 || idx.FilteredLowValueFileArtifacts > 0 || idx.DuplicateMerged > 0 {
 		findings = append(
@@ -1621,13 +1621,14 @@ func writeOccurrenceEntry(w io.Writer, occ componentOccurrence, t translations) 
 	for _, dp := range occ.DeliveryPaths {
 		fmt.Fprintf(w, "- %s: `%s`\n", t.deliveryPath, dp)
 	}
-	if len(occ.EvidencePaths) > 0 {
+	switch {
+	case len(occ.EvidencePaths) > 0:
 		for _, evidencePath := range occ.EvidencePaths {
 			fmt.Fprintf(w, "- %s: `%s`\n", t.evidencePath, evidencePath)
 		}
-	} else if occ.EvidenceSource != "" {
+	case occ.EvidenceSource != "":
 		fmt.Fprintf(w, "- %s: %s\n", t.evidencePath, occ.EvidenceSource)
-	} else {
+	default:
 		fmt.Fprintf(w, "- %s: %s\n", t.evidencePath, t.noEvidenceRecorded)
 	}
 	if occ.FoundBy != "" {
@@ -2001,7 +2002,7 @@ func writeResidualRisk(w io.Writer, data ReportData, ext extractionStats, scn sc
 	}
 	if scn.Successful > 0 {
 		fmt.Fprintf(w, "- %s %s\n",
-			fmt.Sprintf(t.residualRiskNoComponentTasks, scn.NoComponentTasks, scn.Successful, samplePaths(scn.NoComponentPaths, 3)),
+			fmt.Sprintf(t.residualRiskNoComponentTasks, scn.NoComponentTasks, scn.Successful, samplePaths(scn.NoComponentPaths)),
 			sectionLink(t.scanNoPackageIDsSection, anchorScanNoPackageIDs))
 	}
 	suppression := collectSuppressionStats(data.Suppressions)
@@ -2026,13 +2027,13 @@ func writeResidualRisk(w io.Writer, data ReportData, ext extractionStats, scn sc
 		))
 	}
 	if ext.Failed > 0 || ext.SecurityBlocked > 0 {
-		fmt.Fprintf(w, "- %s\n", fmt.Sprintf(t.residualRiskExtractionGap, ext.Failed+ext.SecurityBlocked, samplePaths(append(append([]string{}, ext.FailedPaths...), ext.SecurityBlockedPaths...), 3)))
+		fmt.Fprintf(w, "- %s\n", fmt.Sprintf(t.residualRiskExtractionGap, ext.Failed+ext.SecurityBlocked, samplePaths(append(append([]string{}, ext.FailedPaths...), ext.SecurityBlockedPaths...))))
 	}
 	if ext.ToolMissing > 0 {
-		fmt.Fprintf(w, "- %s\n", fmt.Sprintf(t.residualRiskToolGap, ext.ToolMissing, samplePaths(ext.ToolMissingPaths, 3)))
+		fmt.Fprintf(w, "- %s\n", fmt.Sprintf(t.residualRiskToolGap, ext.ToolMissing, samplePaths(ext.ToolMissingPaths)))
 	}
 	if scn.Errors > 0 {
-		fmt.Fprintf(w, "- %s\n", fmt.Sprintf(t.residualRiskScanGap, scn.Errors, samplePaths(scn.ErrorPaths, 3)))
+		fmt.Fprintf(w, "- %s\n", fmt.Sprintf(t.residualRiskScanGap, scn.Errors, samplePaths(scn.ErrorPaths)))
 	}
 	fmt.Fprintf(w, "- %s\n", fmt.Sprintf(t.residualRiskMoreDetails, scanApproachLink("Package Detection Reliability", "6-package-detection-reliability")))
 }
@@ -2053,7 +2054,9 @@ func configSkipExtensionsDisplay(exts []string) string {
 	return strings.Join(sorted[:maxShow], " ") + fmt.Sprintf(" (+%d more)", len(sorted)-maxShow)
 }
 
-func samplePaths(paths []string, maxCount int) string {
+func samplePaths(paths []string) string {
+	const maxCount = 3
+
 	if len(paths) == 0 {
 		return "none"
 	}

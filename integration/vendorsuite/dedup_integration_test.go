@@ -118,7 +118,7 @@ func TestDedupJARInsideZIP_NoDuplicatesInSBOM(t *testing.T) {
 	cfg.InputPath = inputPath
 	cfg.OutputDir = dir
 	cfg.WorkDir = filepath.Join(dir, "work")
-	if err := os.MkdirAll(cfg.WorkDir, 0o755); err != nil {
+	if err := os.MkdirAll(cfg.WorkDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	cfg.Unsafe = true // no sandbox needed for this test
@@ -303,31 +303,31 @@ func TestDedupMultipleJARsInsideZIP(t *testing.T) {
 	for _, j := range jars {
 		jarPath := filepath.Join(t.TempDir(), filepath.Base(j.name))
 		makeTestJAR(t, jarPath, j.groupID, j.artifactID, j.version)
-		jarData, err := os.ReadFile(jarPath)
-		if err != nil {
-			t.Fatal(err)
+		jarData, readErr := os.ReadFile(jarPath)
+		if readErr != nil {
+			t.Fatal(readErr)
 		}
-		entry, err := zw.Create(j.name)
-		if err != nil {
-			t.Fatal(err)
+		entry, createErr := zw.Create(j.name)
+		if createErr != nil {
+			t.Fatal(createErr)
 		}
-		if _, err := entry.Write(jarData); err != nil {
-			t.Fatal(err)
+		if _, writeErr := entry.Write(jarData); writeErr != nil {
+			t.Fatal(writeErr)
 		}
 	}
-	if err := zw.Close(); err != nil {
-		t.Fatal(err)
+	if closeErr := zw.Close(); closeErr != nil {
+		t.Fatal(closeErr)
 	}
-	if err := f.Close(); err != nil {
-		t.Fatal(err)
+	if closeErr := f.Close(); closeErr != nil {
+		t.Fatal(closeErr)
 	}
 
 	cfg := config.DefaultConfig()
 	cfg.InputPath = inputPath
 	cfg.OutputDir = dir
 	cfg.WorkDir = filepath.Join(dir, "work")
-	if err := os.MkdirAll(cfg.WorkDir, 0o755); err != nil {
-		t.Fatal(err)
+	if mkdirErr := os.MkdirAll(cfg.WorkDir, 0o750); mkdirErr != nil {
+		t.Fatal(mkdirErr)
 	}
 	cfg.Unsafe = true
 
@@ -395,7 +395,7 @@ func TestEvidencePathNotSelfReferencing(t *testing.T) {
 	cfg.InputPath = inputPath
 	cfg.OutputDir = dir
 	cfg.WorkDir = filepath.Join(dir, "work")
-	if err := os.MkdirAll(cfg.WorkDir, 0o755); err != nil {
+	if err := os.MkdirAll(cfg.WorkDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	cfg.Unsafe = true

@@ -178,8 +178,8 @@ func Run(ctx context.Context, cfg config.Config) Result {
 				finalBOMCount = len(*bom.Components)
 			}
 			fsCount, lvCount, weakCount, purlCount := 0, 0, 0, 0
-			for _, s := range asmSuppressions {
-				switch s.Reason {
+			for i := range asmSuppressions {
+				switch asmSuppressions[i].Reason {
 				case assembly.SuppressionFSArtifact:
 					fsCount++
 				case assembly.SuppressionLowValueFile:

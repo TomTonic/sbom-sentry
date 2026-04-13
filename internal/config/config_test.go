@@ -388,10 +388,10 @@ func TestDefaultConfigSkipExtensionsCoversDocumentFormats(t *testing.T) {
 	}
 
 	required := []string{
-		".xls", ".doc", ".ppt",        // legacy OLE
-		".xlsx", ".docx", ".pptx",     // OOXML
-		".odt", ".ods", ".odp",        // OpenDocument
-		".pdf",                        // PDF
+		".xls", ".doc", ".ppt", // legacy OLE
+		".xlsx", ".docx", ".pptx", // OOXML
+		".odt", ".ods", ".odp", // OpenDocument
+		".pdf", // PDF
 	}
 
 	skipSet := make(map[string]bool, len(cfg.SkipExtensions))
