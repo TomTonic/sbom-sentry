@@ -242,8 +242,15 @@ func (d *DeniedSandbox) Run(_ context.Context, cmd string, _ []string, _ string,
 // If bwrap is unavailable and cfg.Unsafe is false, Resolve returns a
 // DeniedSandbox together with a non-nil error so callers can surface the
 // condition explicitly while preserving deterministic denied behavior.
+// newBwrapSandboxFunc is the factory used by Resolve to create a
+// BwrapSandbox. Tests can override this to simulate bwrap absence on
+// platforms where bwrap is actually installed.
+var newBwrapSandboxFunc = func() *BwrapSandbox {
+	return NewBwrapSandbox()
+}
+
 func Resolve(cfg config.Config) (Sandbox, error) {
-	bwrap := NewBwrapSandbox()
+	bwrap := newBwrapSandboxFunc()
 	if bwrap.Available() {
 		return bwrap, nil
 	}

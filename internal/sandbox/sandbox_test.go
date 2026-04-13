@@ -6,6 +6,7 @@ package sandbox
 import (
 	"context"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/TomTonic/extract-sbom/internal/config"
@@ -86,15 +87,20 @@ func TestBwrapSandboxRunFailsWhenUnavailable(t *testing.T) {
 	}
 }
 
+// fakeBwrapUnavailable returns a BwrapSandbox that reports as unavailable,
+// regardless of the actual system state. Used to test Resolve fallback logic
+// on all platforms including Linux.
+func fakeBwrapUnavailable() *BwrapSandbox {
+	return &BwrapSandbox{bwrapPath: ""} // empty path → Available() returns false
+}
+
 // TestResolveReturnsPassthroughWhenUnsafe verifies that Resolve returns
 // a PassthroughSandbox when bwrap is unavailable and --unsafe is set.
+// Uses a test double so this runs on all platforms including Linux.
 func TestResolveReturnsPassthroughWhenUnsafe(t *testing.T) {
-	t.Parallel()
-
-	if runtime.GOOS == "linux" {
-		// On Linux, bwrap might be available, so we skip.
-		t.Skip("test only reliable on non-Linux")
-	}
+	original := newBwrapSandboxFunc
+	newBwrapSandboxFunc = fakeBwrapUnavailable
+	t.Cleanup(func() { newBwrapSandboxFunc = original })
 
 	cfg := config.DefaultConfig()
 	cfg.Unsafe = true
@@ -111,12 +117,11 @@ func TestResolveReturnsPassthroughWhenUnsafe(t *testing.T) {
 
 // TestResolveReturnsDeniedWhenNotUnsafeAndNoBwrap verifies that Resolve
 // returns a DeniedSandbox when bwrap is unavailable and --unsafe is not set.
+// Uses a test double so this runs on all platforms including Linux.
 func TestResolveReturnsDeniedWhenNotUnsafeAndNoBwrap(t *testing.T) {
-	t.Parallel()
-
-	if runtime.GOOS == "linux" {
-		t.Skip("test only reliable on non-Linux where bwrap is absent")
-	}
+	original := newBwrapSandboxFunc
+	newBwrapSandboxFunc = fakeBwrapUnavailable
+	t.Cleanup(func() { newBwrapSandboxFunc = original })
 
 	cfg := config.DefaultConfig()
 	cfg.Unsafe = false
@@ -136,6 +141,48 @@ func TestResolveReturnsDeniedWhenNotUnsafeAndNoBwrap(t *testing.T) {
 	err = sb.Run(context.Background(), "7zz", nil, "/tmp/input", "/tmp/output")
 	if err == nil {
 		t.Error("DeniedSandbox.Run should always return an error")
+	}
+}
+
+// TestResolveReturnsBwrapWhenAvailable verifies that Resolve returns a
+// BwrapSandbox when bwrap is available.
+func TestResolveReturnsBwrapWhenAvailable(t *testing.T) {
+	original := newBwrapSandboxFunc
+	newBwrapSandboxFunc = func() *BwrapSandbox {
+		// Simulate bwrap available on Linux.
+		return &BwrapSandbox{bwrapPath: "/usr/bin/bwrap"}
+	}
+	t.Cleanup(func() { newBwrapSandboxFunc = original })
+
+	// Only works on Linux because Available() checks runtime.GOOS.
+	if runtime.GOOS != "linux" {
+		t.Skip("BwrapSandbox.Available() requires Linux")
+	}
+
+	cfg := config.DefaultConfig()
+	cfg.Unsafe = false
+
+	sb, err := Resolve(cfg)
+	if err != nil {
+		t.Fatalf("Resolve returned error: %v", err)
+	}
+	if sb.Name() != "bwrap" {
+		t.Errorf("Resolve returned %q, want bwrap", sb.Name())
+	}
+}
+
+// TestDeniedSandboxRunErrorIncludesGuidance verifies that the DeniedSandbox
+// error message includes the --unsafe flag guidance for the operator.
+func TestDeniedSandboxRunErrorIncludesGuidance(t *testing.T) {
+	t.Parallel()
+
+	sb := NewDeniedSandbox()
+	err := sb.Run(context.Background(), "7zz", nil, "/tmp/input", "/tmp/output")
+	if err == nil {
+		t.Fatal("expected error from DeniedSandbox.Run")
+	}
+	if !strings.Contains(err.Error(), "--unsafe") {
+		t.Errorf("error message should mention --unsafe, got: %v", err)
 	}
 }
 
