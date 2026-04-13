@@ -6,6 +6,7 @@
 package policy
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 
@@ -178,20 +179,23 @@ func (e *Engine) HasSkip() bool {
 }
 
 // isHardSecurity checks if an error is a hard security violation.
+// Uses errors.As to correctly handle wrapped errors (fmt.Errorf %w).
 func isHardSecurity(err error) bool {
-	_, ok := err.(*safeguard.HardSecurityError)
-	return ok
+	var target *safeguard.HardSecurityError
+	return errors.As(err, &target)
 }
 
 // isResourceLimit checks if an error is a resource limit violation.
+// Uses errors.As to correctly handle wrapped errors (fmt.Errorf %w).
 func isResourceLimit(err error) bool {
-	_, ok := err.(*safeguard.ResourceLimitError)
-	return ok
+	var target *safeguard.ResourceLimitError
+	return errors.As(err, &target)
 }
 
 // extractLimitName extracts the limit name from a ResourceLimitError.
 func extractLimitName(err error) string {
-	if rle, ok := err.(*safeguard.ResourceLimitError); ok {
+	var rle *safeguard.ResourceLimitError
+	if errors.As(err, &rle) {
 		return rle.Limit
 	}
 	return "unknown"

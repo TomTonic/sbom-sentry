@@ -5,6 +5,7 @@
 package policy
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/TomTonic/extract-sbom/internal/config"
@@ -291,4 +292,56 @@ type testError struct {
 
 func (e *testError) Error() string {
 	return e.msg
+}
+
+// TestWrappedHardSecurityErrorIsClassifiedCorrectly verifies that a
+// HardSecurityError wrapped via fmt.Errorf %w is still recognized by
+// the policy engine as a hard security violation. Without errors.As,
+// wrapped errors would fall through to the generic default case.
+func TestWrappedHardSecurityErrorIsClassifiedCorrectly(t *testing.T) {
+	t.Parallel()
+
+	engine := NewEngine(config.PolicyPartial)
+
+	// Wrap the error like an upstream caller might do.
+	inner := &safeguard.HardSecurityError{Violation: "symlink", Path: "evil.txt", Detail: "symlink escape"}
+	wrapped := fmt.Errorf("extract: failed at node: %w", inner)
+
+	d := engine.Evaluate(Violation{
+		Type:     "hard-security",
+		NodePath: "/test.zip/evil.txt",
+		Error:    wrapped,
+	})
+
+	if d.Action != ActionAbort {
+		t.Errorf("wrapped HardSecurityError: action = %v, want abort", d.Action)
+	}
+	if d.Trigger != "hard-security" {
+		t.Errorf("wrapped HardSecurityError: trigger = %q, want %q", d.Trigger, "hard-security")
+	}
+}
+
+// TestWrappedResourceLimitErrorIsClassifiedCorrectly verifies that a
+// ResourceLimitError wrapped via fmt.Errorf %w is still recognized by
+// the policy engine and produces the correct trigger name.
+func TestWrappedResourceLimitErrorIsClassifiedCorrectly(t *testing.T) {
+	t.Parallel()
+
+	engine := NewEngine(config.PolicyPartial)
+
+	inner := &safeguard.ResourceLimitError{Limit: "max-files", Current: 999, Max: 100, Path: "/test.zip"}
+	wrapped := fmt.Errorf("safeguard: %w", inner)
+
+	d := engine.Evaluate(Violation{
+		Type:     "resource-limit",
+		NodePath: "/test.zip",
+		Error:    wrapped,
+	})
+
+	if d.Action != ActionSkip {
+		t.Errorf("wrapped ResourceLimitError in partial mode: action = %v, want skip", d.Action)
+	}
+	if d.Trigger != "max-files" {
+		t.Errorf("wrapped ResourceLimitError: trigger = %q, want %q", d.Trigger, "max-files")
+	}
 }
