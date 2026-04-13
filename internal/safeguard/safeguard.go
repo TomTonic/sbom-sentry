@@ -169,6 +169,24 @@ func ValidateEntry(header EntryHeader, limits config.Limits, stats *ExtractionSt
 		return nil
 	}
 
+	// Hard security: reject negative sizes. A malicious archive can report
+	// negative UncompressedSize or CompressedSize to underflow cumulative
+	// size counters and bypass total-size limits.
+	if header.UncompressedSize < 0 {
+		return &HardSecurityError{
+			Violation: "negative-size",
+			Path:      header.Name,
+			Detail:    fmt.Sprintf("negative uncompressed size %d", header.UncompressedSize),
+		}
+	}
+	if header.CompressedSize < 0 {
+		return &HardSecurityError{
+			Violation: "negative-size",
+			Path:      header.Name,
+			Detail:    fmt.Sprintf("negative compressed size %d", header.CompressedSize),
+		}
+	}
+
 	// Resource limit: per-entry size.
 	if header.UncompressedSize > limits.MaxEntrySize {
 		return &ResourceLimitError{
@@ -179,10 +197,14 @@ func ValidateEntry(header EntryHeader, limits config.Limits, stats *ExtractionSt
 		}
 	}
 
-	// Resource limit: compression ratio.
+	// Resource limit: compression ratio. Uses multiplication instead of
+	// division to avoid truncation toward zero and division-by-zero.
+	// CompressedSize==0 is skipped because TAR and other uncompressed
+	// archive formats don't provide compressed sizes; the per-entry size
+	// limit provides the backstop for those formats.
 	if header.CompressedSize > 0 && limits.MaxRatio > 0 {
-		ratio := header.UncompressedSize / header.CompressedSize
-		if ratio > int64(limits.MaxRatio) {
+		if header.UncompressedSize > int64(limits.MaxRatio)*header.CompressedSize {
+			ratio := header.UncompressedSize / header.CompressedSize
 			return &ResourceLimitError{
 				Limit:   "max-ratio",
 				Current: ratio,

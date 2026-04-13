@@ -355,3 +355,163 @@ func TestResourceLimitErrorIncludesDetails(t *testing.T) {
 		t.Error("error message is empty")
 	}
 }
+
+// TestValidateEntryRejectsNegativeUncompressedSize verifies that archive
+// entries with negative UncompressedSize are rejected as hard security
+// violations. A crafted archive could use negative sizes to underflow the
+// cumulative TotalSize counter and bypass MaxTotalSize limits.
+func TestValidateEntryRejectsNegativeUncompressedSize(t *testing.T) {
+	t.Parallel()
+
+	header := EntryHeader{
+		Name:             "evil.bin",
+		UncompressedSize: -1,
+		CompressedSize:   100,
+		Mode:             0o644,
+	}
+
+	limits := config.DefaultLimits()
+	stats := &ExtractionStats{}
+
+	err := ValidateEntry(header, limits, stats)
+	if err == nil {
+		t.Fatal("expected error for negative uncompressed size")
+	}
+	if _, ok := err.(*HardSecurityError); !ok {
+		t.Errorf("expected HardSecurityError, got %T: %v", err, err)
+	}
+}
+
+// TestValidateEntryRejectsNegativeCompressedSize verifies that archive
+// entries with negative CompressedSize are rejected as hard security
+// violations to prevent ratio-check bypass.
+func TestValidateEntryRejectsNegativeCompressedSize(t *testing.T) {
+	t.Parallel()
+
+	header := EntryHeader{
+		Name:             "evil.bin",
+		UncompressedSize: 100,
+		CompressedSize:   -1,
+		Mode:             0o644,
+	}
+
+	limits := config.DefaultLimits()
+	stats := &ExtractionStats{}
+
+	err := ValidateEntry(header, limits, stats)
+	if err == nil {
+		t.Fatal("expected error for negative compressed size")
+	}
+	if _, ok := err.(*HardSecurityError); !ok {
+		t.Errorf("expected HardSecurityError, got %T: %v", err, err)
+	}
+}
+
+// TestValidateEntryAllowsZeroCompressedSizeWithLargeUncompressed verifies
+// that an archive entry with CompressedSize==0 and nonzero
+// UncompressedSize is allowed. TAR and other uncompressed archive formats
+// don't provide compressed sizes. The per-entry size limit provides the
+// backstop for these formats; the ratio check only applies when
+// CompressedSize is available (> 0).
+func TestValidateEntryAllowsZeroCompressedSizeWithLargeUncompressed(t *testing.T) {
+	t.Parallel()
+
+	limits := config.DefaultLimits()
+	limits.MaxRatio = 100
+
+	header := EntryHeader{
+		Name:             "tar-entry.bin",
+		UncompressedSize: 999999,
+		CompressedSize:   0,
+		Mode:             0o644,
+	}
+
+	stats := &ExtractionStats{}
+	err := ValidateEntry(header, limits, stats)
+	// Should pass: CompressedSize==0 means ratio check is skipped.
+	// The per-entry size limit is the backstop.
+	if err != nil {
+		t.Errorf("unexpected error for zero compressed size: %v", err)
+	}
+}
+
+// TestValidateEntryRejectsNearBoundaryCompressionRatio verifies that the
+// multiplication-based ratio check catches ratios that integer division
+// would miss due to truncation. For example, with MaxRatio=10, an entry
+// with uncompressed=109 and compressed=10 has a true ratio of 10.9 —
+// integer division yields 10 (passes old check), but the new
+// multiplication-based check correctly rejects it.
+func TestValidateEntryRejectsNearBoundaryCompressionRatio(t *testing.T) {
+	t.Parallel()
+
+	limits := config.DefaultLimits()
+	limits.MaxRatio = 10
+
+	header := EntryHeader{
+		Name:             "sneaky.bin",
+		UncompressedSize: 109, // 109 / 10 = 10 (truncated), but 109 > 10*10
+		CompressedSize:   10,
+		Mode:             0o644,
+	}
+
+	stats := &ExtractionStats{}
+	err := ValidateEntry(header, limits, stats)
+	if err == nil {
+		t.Fatal("expected error for near-boundary compression ratio (10.9 > MaxRatio 10)")
+	}
+	if rle, ok := err.(*ResourceLimitError); !ok {
+		t.Errorf("expected ResourceLimitError, got %T: %v", err, err)
+	} else if rle.Limit != "max-ratio" {
+		t.Errorf("Limit = %q, want %q", rle.Limit, "max-ratio")
+	}
+}
+
+// TestValidateEntryAcceptsExactBoundaryCompressionRatio verifies that an
+// entry whose compression ratio is exactly at the limit passes validation.
+// With MaxRatio=10, uncompressed=100 and compressed=10 yields ratio
+// exactly 10, which should be allowed.
+func TestValidateEntryAcceptsExactBoundaryCompressionRatio(t *testing.T) {
+	t.Parallel()
+
+	limits := config.DefaultLimits()
+	limits.MaxRatio = 10
+
+	header := EntryHeader{
+		Name:             "exact.bin",
+		UncompressedSize: 100, // 100 / 10 = exactly 10, not > 10
+		CompressedSize:   10,
+		Mode:             0o644,
+	}
+
+	stats := &ExtractionStats{}
+	if err := ValidateEntry(header, limits, stats); err != nil {
+		t.Errorf("unexpected error for exact boundary ratio: %v", err)
+	}
+}
+
+// TestValidateEntryNegativeSizeDoesNotDecreaseTotalSize verifies that a
+// negative UncompressedSize cannot be used to reduce the cumulative
+// TotalSize counter, which would create headroom for subsequent entries
+// to bypass MaxTotalSize.
+func TestValidateEntryNegativeSizeDoesNotDecreaseTotalSize(t *testing.T) {
+	t.Parallel()
+
+	limits := config.DefaultLimits()
+	limits.MaxTotalSize = 100
+
+	stats := &ExtractionStats{TotalSize: 90}
+	header := EntryHeader{
+		Name:             "underflow.bin",
+		UncompressedSize: -50, // Would decrease TotalSize to 40 if not caught
+		Mode:             0o644,
+	}
+
+	err := ValidateEntry(header, limits, stats)
+	if err == nil {
+		t.Fatal("expected error for negative uncompressed size")
+	}
+	// TotalSize must not have decreased.
+	if stats.TotalSize != 90 {
+		t.Errorf("TotalSize = %d, want 90 (must not decrease)", stats.TotalSize)
+	}
+}
