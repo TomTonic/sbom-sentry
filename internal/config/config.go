@@ -254,6 +254,38 @@ type Config struct {
 	Limits           Limits
 	ProgressFn       ProgressReporter // optional runtime progress sink
 	ParallelScanners int              // number of concurrent Syft scan workers (default: GOMAXPROCS, capped at 16)
+	// SkipExtensions lists file extensions (lowercase, with leading dot) that
+	// are excluded from recursive extraction and Syft-native scanning. Paths
+	// whose extension appears in this list are recorded as StatusSkipped with
+	// an "extension filter" detail. The default list covers legacy Office OLE
+	// formats, OOXML document formats, OpenDocument formats, and PDF.
+	SkipExtensions []string
+}
+
+// defaultSkipExtensions returns the default list of file extensions that are
+// excluded from extraction. It covers document formats that are never software
+// packages — they would either fail extraction or produce noisy false results.
+//
+// The list can be overridden entirely via --skip-extensions or the config file.
+// Pass an empty slice to disable all extension filtering.
+func defaultSkipExtensions() []string {
+	return []string{
+		// Legacy OLE Compound Document formats (MSI magic, but not installers)
+		".doc", ".dot",
+		".xls", ".xlt", ".xla",
+		".ppt", ".pot", ".pps", ".ppa",
+		".vsd", ".vss", ".vst",
+		".msg", ".pub", ".mdb",
+		// OOXML Office document formats (valid ZIP, but not software packages)
+		".docx", ".docm", ".dotx", ".dotm",
+		".xlsx", ".xlsm", ".xltx", ".xltm",
+		".pptx", ".pptm", ".potx", ".potm", ".ppsx", ".ppsm",
+		".vsdx", ".vsdm",
+		// OpenDocument formats
+		".odt", ".ods", ".odp", ".odg", ".odf",
+		// PDF
+		".pdf",
+	}
 }
 
 // DefaultConfig returns a Config with sensible defaults.
@@ -269,6 +301,7 @@ func DefaultConfig() Config {
 		WorkDir:          os.TempDir(),
 		Limits:           DefaultLimits(),
 		ParallelScanners: defaultParallelScanners(),
+		SkipExtensions:   defaultSkipExtensions(),
 	}
 }
 

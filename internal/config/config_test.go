@@ -375,3 +375,33 @@ func TestProgressLevelStringReturnsReadableName(t *testing.T) {
 		t.Errorf("got %q", ProgressVerbose.String())
 	}
 }
+
+// TestDefaultConfigSkipExtensionsCoversDocumentFormats verifies that the
+// default SkipExtensions list is non-empty and covers the key legacy Office
+// and OOXML document formats that must never be treated as software packages.
+func TestDefaultConfigSkipExtensionsCoversDocumentFormats(t *testing.T) {
+	t.Parallel()
+	cfg := DefaultConfig()
+
+	if len(cfg.SkipExtensions) == 0 {
+		t.Fatal("SkipExtensions is empty, want a non-empty default list")
+	}
+
+	required := []string{
+		".xls", ".doc", ".ppt",        // legacy OLE
+		".xlsx", ".docx", ".pptx",     // OOXML
+		".odt", ".ods", ".odp",        // OpenDocument
+		".pdf",                        // PDF
+	}
+
+	skipSet := make(map[string]bool, len(cfg.SkipExtensions))
+	for _, e := range cfg.SkipExtensions {
+		skipSet[e] = true
+	}
+
+	for _, ext := range required {
+		if !skipSet[ext] {
+			t.Errorf("SkipExtensions missing %q", ext)
+		}
+	}
+}

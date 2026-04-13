@@ -160,6 +160,17 @@ func extractRecursive(ctx context.Context, node *ExtractionNode, filePath string
 	}
 	node.Format = info
 
+	// Apply extension filter: skip files whose extension appears on the
+	// configured skip list. This fires even before the SyftNative check so
+	// that document formats (e.g. .docx, .xlsx) that are valid ZIPs are never
+	// accidentally treated as software packages.
+	if isSkippedExtension(filePath, cfg.SkipExtensions) {
+		ext := strings.ToLower(filepath.Ext(filePath))
+		node.Status = StatusSkipped
+		node.StatusDetail = "extension filter: " + ext + " is excluded from extraction"
+		return nil
+	}
+
 	// Syft-native: delegate to Syft, do not extract.
 	if info.SyftNative {
 		node.Status = StatusSyftNative
@@ -786,4 +797,23 @@ func safeUint64ToInt64(v uint64) int64 {
 		return maxInt64
 	}
 	return int64(v)
+}
+
+// isSkippedExtension reports whether filePath ends with an extension that
+// appears on the skipList. Both the path extension and each skip-list entry
+// are lowercased before comparison, so the check is always case-insensitive.
+func isSkippedExtension(filePath string, skipList []string) bool {
+	if len(skipList) == 0 {
+		return false
+	}
+	ext := strings.ToLower(filepath.Ext(filePath))
+	if ext == "" {
+		return false
+	}
+	for _, s := range skipList {
+		if strings.ToLower(s) == ext {
+			return true
+		}
+	}
+	return false
 }

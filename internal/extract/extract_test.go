@@ -1044,6 +1044,91 @@ func TestExtractZIPFileCountLimitPropagates(t *testing.T) {
 	}
 }
 
+// TestExtensionFilterSkipsDocumentFormats verifies that files with extensions
+// on the configured SkipExtensions list do not cause extraction failures. This
+// is a regression test for the specific bug where .xls files (OLE compound
+// document) were previously misidentified as MSI and then failing 7zz
+// extraction with "Is not archive".
+func TestExtensionFilterSkipsDocumentFormats(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	// Build a ZIP that contains a fake .xls (OLE magic bytes) and a fake
+	// .xlsx (tiny content). Without the extension filter the .xls would be
+	// identified as MSI and 7zz would fail; with it the node is silently
+	// skipped and the overall extraction succeeds.
+	oleHeader := []byte{0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1}
+	xlsContent := make([]byte, 300)
+	copy(xlsContent, oleHeader)
+
+	zipPath := createTestZIP(t, dir, "delivery.zip", map[string][]byte{
+		"DataModel_de.xls": xlsContent,
+		"readme.txt":       []byte("Hello"),
+		"document.xlsx":    []byte("fake xlsx content"),
+	})
+
+	cfg := config.DefaultConfig()
+	cfg.InputPath = zipPath
+	cfg.OutputDir = dir
+	cfg.Unsafe = true
+	// Ensure .xls and .xlsx are in the skip list.
+	cfg.SkipExtensions = []string{".xls", ".xlsx"}
+
+	tree, err := Extract(context.Background(), zipPath, cfg, sandbox.NewPassthroughSandbox())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if tree == nil {
+		t.Fatal("tree is nil")
+	}
+
+	// The root ZIP extraction must succeed.
+	if tree.Status != StatusExtracted {
+		t.Errorf("root status = %v, want StatusExtracted", tree.Status)
+	}
+
+	// No child should have StatusFailed — that was the old bug.
+	var checkNoFailed func(n *ExtractionNode)
+	checkNoFailed = func(n *ExtractionNode) {
+		if n.Status == StatusFailed {
+			t.Errorf("node %q has StatusFailed (StatusDetail=%q)", n.Path, n.StatusDetail)
+		}
+		for _, c := range n.Children {
+			checkNoFailed(c)
+		}
+	}
+	checkNoFailed(tree)
+
+	CleanupNode(tree)
+}
+
+// TestIsSkippedExtension verifies the case-insensitive extension matching
+// used by the extension filter.
+func TestIsSkippedExtension(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		path     string
+		skipList []string
+		want     bool
+	}{
+		{"/path/file.xls", []string{".xls", ".xlsx"}, true},
+		{"/path/file.XLS", []string{".xls", ".xlsx"}, true},  // case-insensitive
+		{"/path/file.XLSX", []string{".xls", ".xlsx"}, true}, // case-insensitive
+		{"/path/file.msi", []string{".xls", ".xlsx"}, false},
+		{"/path/file.msi", []string{}, false},      // empty list
+		{"/path/file", []string{".xls"}, false},    // no extension
+		{"/path/file.xls", []string{".XLS"}, true}, // skip-list case-insensitive
+	}
+
+	for _, tt := range tests {
+		got := isSkippedExtension(tt.path, tt.skipList)
+		if got != tt.want {
+			t.Errorf("isSkippedExtension(%q, %v) = %v, want %v", tt.path, tt.skipList, got, tt.want)
+		}
+	}
+}
+
 func init() {
 	// For testing, use a simple inline lookup that always fails
 	// (external tools not available in test env).

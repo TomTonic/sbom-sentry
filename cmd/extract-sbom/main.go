@@ -56,6 +56,7 @@ func rootCmd() *cobra.Command {
 		version    string
 		delivDate  string
 		rootProps  []string
+		skipExts   []string
 		unsafe     bool
 		maxDepth   int
 		maxFiles   int
@@ -159,6 +160,7 @@ Configuration can be set via:
 	cmd.Flags().IntVar(&maxRatio, "max-ratio", defaults.Limits.MaxRatio, "Maximum compression ratio per entry")
 	cmd.Flags().StringVar(&timeout, "timeout", "", "Per-extraction timeout")
 	cmd.Flags().IntVar(&parallel, "parallel", defaults.ParallelScanners, "Number of concurrent Syft scan workers")
+	cmd.Flags().StringSliceVar(&skipExts, "skip-extensions", nil, "Comma-separated extensions excluded from extraction (e.g. .docx,.xlsx). Overrides built-in defaults; pass empty string to disable all filtering.")
 
 	return cmd
 }
@@ -252,6 +254,13 @@ func loadConfig(cmd *cobra.Command, args []string) (config.Config, error) {
 			return config.Config{}, fmt.Errorf("invalid timeout: %v", err)
 		}
 		cfg.Limits.Timeout = dur
+	}
+
+	// --skip-extensions: CLI or config file override of the default skip list.
+	// If neither is set, DefaultConfig()'s value is kept as-is. If explicitly
+	// set to an empty list (e.g. --skip-extensions=''), disable all filtering.
+	if cmd.Flags().Changed("skip-extensions") || v.IsSet("skip-extensions") {
+		cfg.SkipExtensions = v.GetStringSlice("skip-extensions")
 	}
 
 	for _, prop := range v.GetStringSlice("root-property") {
