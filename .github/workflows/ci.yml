@@ -43,11 +43,11 @@ jobs:
           total=$(go tool cover -func=coverage.out | awk '/^total:/{gsub(/%/,""); print $3}')
           echo "Total coverage: ${total}%"
           awk -v t="$total" 'BEGIN {
-            if (t+0 < 60) {
-              printf "FAIL: coverage %.1f%% is below the 60%% minimum threshold\n", t+0
+            if (t+0 < 75) {
+              printf "FAIL: coverage %.1f%% is below the 75%% minimum threshold\n", t+0
               exit 1
             }
-            printf "PASS: coverage %.1f%% meets threshold (>= 60%%)\n", t+0
+            printf "PASS: coverage %.1f%% meets threshold (>= 75%%)\n", t+0
           }'
 
   lint:
