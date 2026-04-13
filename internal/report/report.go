@@ -1820,12 +1820,16 @@ func writeResidualRisk(w io.Writer, data ReportData, ext extractionStats, scn sc
 		fmt.Fprintf(w, "- %s\n", fmt.Sprintf(t.residualRiskEvidenceCoverage, idx.IndexedWithEvidencePath, idx.IndexedWithEvidenceSourceOnly, idx.IndexedWithoutEvidence))
 	}
 	if scn.Successful > 0 {
-		fmt.Fprintf(w, "- %s\n", fmt.Sprintf(t.residualRiskNoComponentTasks, scn.NoComponentTasks, scn.Successful, samplePaths(scn.NoComponentPaths, 3)))
+		fmt.Fprintf(w, "- %s %s\n",
+			fmt.Sprintf(t.residualRiskNoComponentTasks, scn.NoComponentTasks, scn.Successful, samplePaths(scn.NoComponentPaths, 3)),
+			sectionLink(t.scanSection, anchorScan))
 	}
 	suppression := collectSuppressionStats(data.Suppressions)
 	fileArtifactCount := suppression.FSArtifacts + suppression.LowValueFiles
 	if fileArtifactCount > 0 {
-		fmt.Fprintf(w, "- %s\n", fmt.Sprintf(t.residualRiskFileArtifactCoverage, fileArtifactCount))
+		fmt.Fprintf(w, "- %s %s\n",
+			fmt.Sprintf(t.residualRiskFileArtifactCoverage, fileArtifactCount),
+			sectionLink(t.componentNormalizationSection, anchorSuppression))
 	}
 	if ext.ExtensionFiltered > 0 {
 		fmt.Fprintf(w, "- %s %d %s [%s](#%s).\n",
