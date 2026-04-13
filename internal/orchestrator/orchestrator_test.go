@@ -137,7 +137,12 @@ func TestRunWithCancelledContextHandlesGracefully(t *testing.T) {
 
 	// Should not panic.
 	result := Run(ctx, cfg)
-	_ = result
+
+	// A cancelled context must not result in ExitSuccess — the pipeline
+	// cannot have completed normally.
+	if result.ExitCode == ExitSuccess && result.Error == nil {
+		t.Error("cancelled context produced ExitSuccess with no error; expected a non-success outcome")
+	}
 }
 
 // TestExitCodeConstants verifies that exit code values match the

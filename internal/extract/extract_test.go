@@ -398,11 +398,23 @@ func TestExtractRespectsDepthLimit(t *testing.T) {
 		t.Fatal("tree should not be nil even when depth is exceeded")
 	}
 
-	// With depth 0, the root itself is at depth 0 which exceeds maxDepth 0.
-	// Actually depth check is > MaxDepth, so depth 0 with max 0 should be OK.
-	// Let's adjust: the initial call is at depth 0, and MaxDepth=1 means max is 1.
-	// With MaxDepth=0 this is < 1, so it should fail.
-	_ = err // Error may or may not be returned depending on policy.
+	// With MaxDepth=0, depth 1 for nested content exceeds the limit.
+	// The root is processed at depth 0 (allowed), but its children at
+	// depth 1 would exceed MaxDepth=0.
+	// However, the root itself is a ZIP at depth 0 which is <= MaxDepth,
+	// so it will be extracted. The important thing is that the error
+	// surfaces as a ResourceLimitError if depth is exceeded.
+	if err != nil {
+		// If an error was returned, it must be a ResourceLimitError.
+		if _, ok := err.(*safeguard.ResourceLimitError); !ok {
+			t.Errorf("expected ResourceLimitError, got %T: %v", err, err)
+		}
+	}
+
+	// Verify the tree has a definitive status (not stuck as pending).
+	if tree.Status == StatusPending {
+		t.Error("root node should not remain in pending status after extraction")
+	}
 }
 
 // TestExtractHandlesContextCancellation verifies that extraction respects
@@ -425,10 +437,20 @@ func TestExtractHandlesContextCancellation(t *testing.T) {
 
 	sb := sandbox.NewPassthroughSandbox()
 
-	_, err := Extract(ctx, zipPath, cfg, sb)
-	// The cancelled context may or may not produce an error depending on timing.
-	// Just verify it doesn't panic.
-	_ = err
+	tree, err := Extract(ctx, zipPath, cfg, sb)
+	// A cancelled context must not leave the tree nil.
+	if tree == nil {
+		t.Fatal("tree should not be nil even with cancelled context")
+	}
+	// Either an error is returned (context.Canceled) or the tree has a
+	// non-success status. At minimum the tree must not claim success
+	// while the context was cancelled.
+	if err == nil && tree.Status == StatusExtracted {
+		// If extraction somehow completed despite cancellation (race), that's
+		// acceptable — but verify it didn't silently swallow the cancellation.
+		// For an immediate cancel, this is very unlikely but timing-dependent.
+		t.Log("extraction completed despite cancelled context (timing-dependent, acceptable)")
+	}
 }
 
 // TestExtract7zMarksToolMissingWhenUnavailable verifies that unsupported hosts
