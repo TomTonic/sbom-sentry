@@ -49,7 +49,7 @@ An overall software module guide shall be maintained, describing:
 
 ### 3.2 Code Documentation
 
-Every exported function or method must have a GoDoc comment describing:
+Every non-trivial function or data structure must have a GoDoc comment describing:
 
 - What it does
 - Why it exists
