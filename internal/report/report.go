@@ -99,15 +99,17 @@ type componentIndexStats struct {
 }
 
 type extractionStats struct {
-	Total           int
-	Extracted       int
-	SyftNative      int
-	Failed          int
-	Skipped         int
-	ToolMissing     int
-	SecurityBlocked int
-	Pending         int
-	Other           int
+	Total                  int
+	Extracted              int
+	SyftNative             int
+	Failed                 int
+	Skipped                int
+	ToolMissing            int
+	SecurityBlocked        int
+	Pending                int
+	Other                  int
+	ExtensionFiltered      int
+	ExtensionFilteredPaths []string
 
 	FailedPaths          []string
 	ToolMissingPaths     []string
@@ -152,21 +154,24 @@ type reportSection struct {
 const (
 	scanApproachGitHubURL = "https://github.com/TomTonic/extract-sbom/blob/main/SCAN_APPROACH.md"
 
-	anchorHowToUse         = "how-to-use-this-report"
-	anchorMethodOverview   = "method-at-a-glance"
-	anchorAppendix         = "appendix"
-	anchorInputFile        = "input-file"
-	anchorConfig           = "configuration"
-	anchorRootMetadata     = "root-sbom-metadata"
-	anchorSandbox          = "sandbox-configuration"
-	anchorSummary          = "summary"
-	anchorProcessingErrors = "processing-errors"
-	anchorResidualRisk     = "residual-risk-and-limitations"
-	anchorPolicy           = "policy-decisions"
-	anchorComponentIndex   = "component-occurrence-index"
-	anchorSuppression      = "component-normalization"
-	anchorScan             = "scan-results"
-	anchorExtraction       = "extraction-log"
+	anchorHowToUse              = "how-to-use-this-report"
+	anchorMethodOverview        = "method-at-a-glance"
+	anchorAppendix              = "appendix"
+	anchorInputFile             = "input-file"
+	anchorConfig                = "configuration"
+	anchorExtensionFilter       = "extension-filter"
+	anchorRootMetadata          = "root-sbom-metadata"
+	anchorSandbox               = "sandbox-configuration"
+	anchorSummary               = "summary"
+	anchorProcessingErrors      = "processing-errors"
+	anchorResidualRisk          = "residual-risk-and-limitations"
+	anchorPolicy                = "policy-decisions"
+	anchorComponentIndex        = "component-occurrence-index"
+	anchorComponentsWithPURL    = "components-with-purl"
+	anchorComponentsWithoutPURL = "components-without-purl"
+	anchorSuppression           = "component-normalization"
+	anchorScan                  = "scan-results"
+	anchorExtraction            = "extraction-log"
 )
 
 // ComputeInputSummary computes the file hashes and metadata for the input file.
@@ -221,7 +226,6 @@ func GenerateHuman(data ReportData, lang string, w io.Writer) error {
 	extStats := collectExtractionStats(data.Tree)
 	scnStats := collectScanStats(data.Scans)
 	polStats := collectPolicyStats(data.PolicyDecisions)
-
 	fmt.Fprintf(w, "# %s\n\n", t.title)
 	fmt.Fprintf(w, "## %s\n\n", t.tableOfContentsSection)
 	writeTableOfContents(w, sections)
@@ -255,7 +259,7 @@ func GenerateHuman(data ReportData, lang string, w io.Writer) error {
 	fmt.Fprintln(w)
 
 	writeSectionHeading(w, t.componentIndexSection, anchorComponentIndex)
-	writeComponentOccurrenceIndex(w, occurrences, t)
+	writeComponentOccurrenceIndex(w, occurrences, indexStats, t)
 	fmt.Fprintln(w)
 
 	writeSectionHeading(w, t.componentNormalizationSection, anchorSuppression)
@@ -285,8 +289,14 @@ func GenerateHuman(data ReportData, lang string, w io.Writer) error {
 	fmt.Fprintf(w, "| %s | %d bytes |\n", t.maxEntrySize, data.Config.Limits.MaxEntrySize)
 	fmt.Fprintf(w, "| %s | %d |\n", t.maxRatio, data.Config.Limits.MaxRatio)
 	fmt.Fprintf(w, "| %s | %s |\n", t.timeout, data.Config.Limits.Timeout)
+	fmt.Fprintf(w, "| skip-extensions | %s |\n", configSkipExtensionsDisplay(data.Config.SkipExtensions))
 	fmt.Fprintf(w, "| %s | %s |\n", t.generator, data.Generator.String())
 	fmt.Fprintf(w, "| %s | %s |\n", t.progressLevel, data.Config.ProgressLevel.String())
+	fmt.Fprintln(w)
+
+	// Extension filter section: configured list and files excluded in this run.
+	writeSectionHeading(w, t.extensionFilterSection, anchorExtensionFilter)
+	writeExtensionFilterSection(w, data, extStats, t)
 	fmt.Fprintln(w)
 
 	// Root SBOM metadata.
@@ -638,6 +648,14 @@ type translations struct {
 	suppressionReasonWeakDuplicate string
 	suppressionReasonPURLDuplicate string
 	suppressionReplacedBy          string
+
+	extensionFilterSection              string
+	extensionFilterLead                 string
+	extensionFilterExtensionsLabel      string
+	extensionFilterSkippedLabel         string
+	noExtensionFilteredFiles            string
+	componentIndexWithPURLSubsection    string
+	componentIndexWithoutPURLSubsection string
 }
 
 func getTranslations(lang string) translations {
@@ -745,6 +763,14 @@ func getTranslations(lang string) translations {
 			suppressionReasonWeakDuplicate: "Schwaches Duplikat",
 			suppressionReasonPURLDuplicate: "PURL-Duplikat",
 			suppressionReplacedBy:          "Ersetzt durch",
+
+			extensionFilterSection:              "Dateiendungsfilter",
+			extensionFilterLead:                 "Die folgenden Dateiendungen sind so konfiguriert, dass sie von der rekursiven Extraktion und Syft-Analyse ausgeschlossen werden. Dateien, die diesen Endungen entsprechen, werden im Extraktionsprotokoll nicht aufgeführt und nicht auf Softwarekomponenten untersucht. Die vollständige Abdeckbarkeit der SBOM ist für gefilterte Dateien nicht gewährleistet.",
+			extensionFilterExtensionsLabel:      "Konfigurierter Dateiendungsfilter",
+			extensionFilterSkippedLabel:         "Durch diesen Filter ausgeschlossene Dateien",
+			noExtensionFilteredFiles:            "In diesem Durchlauf wurden keine Dateien durch den Dateiendungsfilter ausgeschlossen.",
+			componentIndexWithPURLSubsection:    "Komponenten mit PURL",
+			componentIndexWithoutPURLSubsection: "Komponenten ohne PURL",
 		}
 	default:
 		return translations{
@@ -849,6 +875,14 @@ func getTranslations(lang string) translations {
 			suppressionReasonWeakDuplicate: "Weak duplicate",
 			suppressionReasonPURLDuplicate: "PURL duplicate",
 			suppressionReplacedBy:          "Replaced by",
+
+			extensionFilterSection:              "Extension Filter",
+			extensionFilterLead:                 "The following file extensions are configured to be excluded from recursive extraction and Syft scanning. Files matching these extensions are not examined for software components and are therefore not reflected in the component inventory. Full SBOM coverage cannot be guaranteed for filtered file types.",
+			extensionFilterExtensionsLabel:      "Configured extension filter",
+			extensionFilterSkippedLabel:         "Files excluded by this filter",
+			noExtensionFilteredFiles:            "No files were excluded by the extension filter in this run.",
+			componentIndexWithPURLSubsection:    "Components with PURL",
+			componentIndexWithoutPURLSubsection: "Components without PURL",
 		}
 	}
 }
@@ -902,6 +936,7 @@ func reportSections(t translations) []reportSection {
 		{title: t.componentNormalizationSection, anchor: anchorSuppression},
 		{title: t.inputSection, anchor: anchorInputFile},
 		{title: t.configSection, anchor: anchorConfig},
+		{title: t.extensionFilterSection, anchor: anchorExtensionFilter},
 		{title: t.rootMetadataSection, anchor: anchorRootMetadata},
 		{title: t.sandboxSection, anchor: anchorSandbox},
 		{title: t.policySection, anchor: anchorPolicy},
@@ -1011,7 +1046,7 @@ func writeSummary(w io.Writer, data ReportData, ext extractionStats, scn scanSta
 	fmt.Fprintf(w, "- %s: %s\n", t.processingTime, duration)
 	fmt.Fprintf(
 		w,
-		"- %s: total=%d extracted=%d syft-native=%d failed=%d tool-missing=%d skipped=%d security-blocked=%d pending=%d\n",
+		"- %s: total=%d extracted=%d syft-native=%d failed=%d tool-missing=%d skipped=%d extension-filtered=%d ([details](#%s)) security-blocked=%d pending=%d\n",
 		t.summaryExtraction,
 		ext.Total,
 		ext.Extracted,
@@ -1019,6 +1054,8 @@ func writeSummary(w io.Writer, data ReportData, ext extractionStats, scn scanSta
 		ext.Failed,
 		ext.ToolMissing,
 		ext.Skipped,
+		ext.ExtensionFiltered,
+		anchorExtensionFilter,
 		ext.SecurityBlocked,
 		ext.Pending,
 	)
@@ -1066,7 +1103,11 @@ func summarizeFindings(ext extractionStats, scn scanStats, idx componentIndexSta
 		findings = append(findings, fmt.Sprintf("All %d Syft scan tasks completed successfully.", scn.Total))
 	}
 	if idx.IndexedComponents > 0 {
-		findings = append(findings, fmt.Sprintf("%d of %d indexed component occurrences carry a PURL; %d do not.", idx.IndexedWithPURL, idx.IndexedComponents, idx.IndexedWithoutPURL))
+		findings = append(findings, fmt.Sprintf(
+			"%d of %d indexed component occurrences [carry a PURL](#%s); [%d do not](#%s).",
+			idx.IndexedWithPURL, idx.IndexedComponents, anchorComponentsWithPURL,
+			idx.IndexedWithoutPURL, anchorComponentsWithoutPURL,
+		))
 	}
 	if scn.NoComponentTasks > 0 {
 		findings = append(findings, fmt.Sprintf("%d successful scan tasks produced no package identities. Examples: %s.", scn.NoComponentTasks, samplePaths(scn.NoComponentPaths, 3)))
@@ -1315,7 +1356,39 @@ func writeSuppressionReport(w io.Writer, suppressions []assembly.SuppressionReco
 	}
 }
 
-func writeComponentOccurrenceIndex(w io.Writer, occurrences []componentOccurrence, t translations) {
+func writeExtensionFilterSection(w io.Writer, data ReportData, ext extractionStats, t translations) {
+	fmt.Fprintln(w, t.extensionFilterLead)
+	fmt.Fprintln(w)
+
+	if len(data.Config.SkipExtensions) > 0 {
+		extensions := make([]string, len(data.Config.SkipExtensions))
+		copy(extensions, data.Config.SkipExtensions)
+		sort.Strings(extensions)
+		quoted := make([]string, len(extensions))
+		for i, e := range extensions {
+			quoted[i] = "`" + e + "`"
+		}
+		fmt.Fprintf(w, "**%s:** %s\n\n", t.extensionFilterExtensionsLabel, strings.Join(quoted, ", "))
+	} else {
+		fmt.Fprintln(w, t.noExtensionFilteredFiles)
+		return
+	}
+
+	fmt.Fprintf(w, "**%s (%d):**\n\n", t.extensionFilterSkippedLabel, ext.ExtensionFiltered)
+	if ext.ExtensionFiltered == 0 {
+		fmt.Fprintf(w, "- %s\n", t.noExtensionFilteredFiles)
+		return
+	}
+
+	paths := make([]string, len(ext.ExtensionFilteredPaths))
+	copy(paths, ext.ExtensionFilteredPaths)
+	sort.Strings(paths)
+	for _, p := range paths {
+		fmt.Fprintf(w, "- `%s`\n", p)
+	}
+}
+
+func writeComponentOccurrenceIndex(w io.Writer, occurrences []componentOccurrence, idx componentIndexStats, t translations) {
 	fmt.Fprintf(w, "%s\n\n", t.componentIndexLead)
 
 	if len(occurrences) == 0 {
@@ -1323,33 +1396,64 @@ func writeComponentOccurrenceIndex(w io.Writer, occurrences []componentOccurrenc
 		return
 	}
 
+	// Split occurrences into with-PURL and without-PURL groups.
+	var withPURL, withoutPURL []componentOccurrence
 	for i := range occurrences {
-		occ := occurrences[i]
-		fmt.Fprintf(w, "### %s\n\n", occ.ObjectID)
-		fmt.Fprintf(w, "- %s: `%s`\n", t.packageName, occ.PackageName)
-		if occ.Version != "" {
-			fmt.Fprintf(w, "- %s: `%s`\n", t.version, occ.Version)
-		}
-		if occ.PURL != "" {
-			fmt.Fprintf(w, "- %s: `%s`\n", t.purl, occ.PURL)
-		}
-		for _, dp := range occ.DeliveryPaths {
-			fmt.Fprintf(w, "- %s: `%s`\n", t.deliveryPath, dp)
-		}
-		if len(occ.EvidencePaths) > 0 {
-			for _, evidencePath := range occ.EvidencePaths {
-				fmt.Fprintf(w, "- %s: `%s`\n", t.evidencePath, evidencePath)
-			}
-		} else if occ.EvidenceSource != "" {
-			fmt.Fprintf(w, "- %s: %s\n", t.evidencePath, occ.EvidenceSource)
+		if occurrences[i].PURL != "" {
+			withPURL = append(withPURL, occurrences[i])
 		} else {
-			fmt.Fprintf(w, "- %s: %s\n", t.evidencePath, t.noEvidenceRecorded)
+			withoutPURL = append(withoutPURL, occurrences[i])
 		}
-		if occ.FoundBy != "" {
-			fmt.Fprintf(w, "- %s: `%s`\n", t.foundBy, occ.FoundBy)
-		}
-		fmt.Fprintln(w)
 	}
+
+	// Write with-PURL subsection.
+	fmt.Fprintf(w, "<a id=\"%s\"></a>\n\n", anchorComponentsWithPURL)
+	fmt.Fprintf(w, "### %s (%d)\n\n", t.componentIndexWithPURLSubsection, idx.IndexedWithPURL)
+	if len(withPURL) == 0 {
+		fmt.Fprintf(w, "- %s\n\n", t.noIndexedComponents)
+	} else {
+		for i := range withPURL {
+			writeOccurrenceEntry(w, withPURL[i], t)
+		}
+	}
+
+	// Write without-PURL subsection.
+	fmt.Fprintf(w, "<a id=\"%s\"></a>\n\n", anchorComponentsWithoutPURL)
+	fmt.Fprintf(w, "### %s (%d)\n\n", t.componentIndexWithoutPURLSubsection, idx.IndexedWithoutPURL)
+	if len(withoutPURL) == 0 {
+		fmt.Fprintf(w, "- %s\n\n", t.noIndexedComponents)
+	} else {
+		for i := range withoutPURL {
+			writeOccurrenceEntry(w, withoutPURL[i], t)
+		}
+	}
+}
+
+func writeOccurrenceEntry(w io.Writer, occ componentOccurrence, t translations) {
+	fmt.Fprintf(w, "### %s\n\n", occ.ObjectID)
+	fmt.Fprintf(w, "- %s: `%s`\n", t.packageName, occ.PackageName)
+	if occ.Version != "" {
+		fmt.Fprintf(w, "- %s: `%s`\n", t.version, occ.Version)
+	}
+	if occ.PURL != "" {
+		fmt.Fprintf(w, "- %s: `%s`\n", t.purl, occ.PURL)
+	}
+	for _, dp := range occ.DeliveryPaths {
+		fmt.Fprintf(w, "- %s: `%s`\n", t.deliveryPath, dp)
+	}
+	if len(occ.EvidencePaths) > 0 {
+		for _, evidencePath := range occ.EvidencePaths {
+			fmt.Fprintf(w, "- %s: `%s`\n", t.evidencePath, evidencePath)
+		}
+	} else if occ.EvidenceSource != "" {
+		fmt.Fprintf(w, "- %s: %s\n", t.evidencePath, occ.EvidenceSource)
+	} else {
+		fmt.Fprintf(w, "- %s: %s\n", t.evidencePath, t.noEvidenceRecorded)
+	}
+	if occ.FoundBy != "" {
+		fmt.Fprintf(w, "- %s: `%s`\n", t.foundBy, occ.FoundBy)
+	}
+	fmt.Fprintln(w)
 }
 
 func collectComponentOccurrences(bom *cdx.BOM) ([]componentOccurrence, componentIndexStats) {
@@ -1701,7 +1805,18 @@ func writeResidualRisk(w io.Writer, data ReportData, ext extractionStats, scn sc
 	fmt.Fprintf(w, "- %s\n", t.residualRiskProfileLead)
 	fmt.Fprintf(w, "- %s\n", t.residualRiskAbsenceHint)
 	if idx.IndexedComponents > 0 {
-		fmt.Fprintf(w, "- %s\n", fmt.Sprintf(t.residualRiskPURLCoverage, idx.IndexedWithPURL, idx.IndexedComponents, idx.IndexedWithoutPURL))
+		// PURL coverage with links to the two component index subsections.
+		purlLine := fmt.Sprintf(t.residualRiskPURLCoverage, idx.IndexedWithPURL, idx.IndexedComponents, idx.IndexedWithoutPURL)
+		// Replace plain number references with hyperlinked equivalents.
+		withPURLLink := fmt.Sprintf("[%d](%s)", idx.IndexedWithPURL, "#"+anchorComponentsWithPURL)
+		withoutPURLLink := fmt.Sprintf("[%d](%s)", idx.IndexedWithoutPURL, "#"+anchorComponentsWithoutPURL)
+		purlLine = strings.Replace(purlLine, fmt.Sprintf("%d of %d indexed", idx.IndexedWithPURL, idx.IndexedComponents),
+			fmt.Sprintf("%s of %d indexed", withPURLLink, idx.IndexedComponents), 1)
+		purlLine = strings.Replace(purlLine, fmt.Sprintf("%d indexed occurrences do not", idx.IndexedWithoutPURL),
+			fmt.Sprintf("%s indexed occurrences do not", withoutPURLLink), 1)
+		purlLine = strings.Replace(purlLine, fmt.Sprintf("%d indexierte Vorkommen haben keine PURL", idx.IndexedWithoutPURL),
+			fmt.Sprintf("%s indexierte Vorkommen haben keine PURL", withoutPURLLink), 1)
+		fmt.Fprintf(w, "- %s\n", purlLine)
 		fmt.Fprintf(w, "- %s\n", fmt.Sprintf(t.residualRiskEvidenceCoverage, idx.IndexedWithEvidencePath, idx.IndexedWithEvidenceSourceOnly, idx.IndexedWithoutEvidence))
 	}
 	if scn.Successful > 0 {
@@ -1711,6 +1826,12 @@ func writeResidualRisk(w io.Writer, data ReportData, ext extractionStats, scn sc
 	fileArtifactCount := suppression.FSArtifacts + suppression.LowValueFiles
 	if fileArtifactCount > 0 {
 		fmt.Fprintf(w, "- %s\n", fmt.Sprintf(t.residualRiskFileArtifactCoverage, fileArtifactCount))
+	}
+	if ext.ExtensionFiltered > 0 {
+		fmt.Fprintf(w, "- %s %d %s [%s](#%s).\n",
+			"Extension filter excluded", ext.ExtensionFiltered,
+			"files from examination; these are not reflected in the component inventory. See",
+			t.extensionFilterSection, anchorExtensionFilter)
 	}
 	if ext.Failed > 0 || ext.SecurityBlocked > 0 {
 		fmt.Fprintf(w, "- %s\n", fmt.Sprintf(t.residualRiskExtractionGap, ext.Failed+ext.SecurityBlocked, samplePaths(append(append([]string{}, ext.FailedPaths...), ext.SecurityBlockedPaths...), 3)))
@@ -1722,6 +1843,22 @@ func writeResidualRisk(w io.Writer, data ReportData, ext extractionStats, scn sc
 		fmt.Fprintf(w, "- %s\n", fmt.Sprintf(t.residualRiskScanGap, scn.Errors, samplePaths(scn.ErrorPaths, 3)))
 	}
 	fmt.Fprintf(w, "- %s\n", fmt.Sprintf(t.residualRiskMoreDetails, scanApproachLink("Package Detection Reliability", "6-package-detection-reliability")))
+}
+
+// configSkipExtensionsDisplay returns a compact one-liner for the configuration
+// table showing the active skip list, capped to keep the table cell readable.
+func configSkipExtensionsDisplay(exts []string) string {
+	if len(exts) == 0 {
+		return "(none)"
+	}
+	sorted := make([]string, len(exts))
+	copy(sorted, exts)
+	sort.Strings(sorted)
+	const maxShow = 200
+	if len(sorted) <= maxShow {
+		return strings.Join(sorted, " ")
+	}
+	return strings.Join(sorted[:maxShow], " ") + fmt.Sprintf(" (+%d more)", len(sorted)-maxShow)
 }
 
 func samplePaths(paths []string, maxCount int) string {
@@ -1780,6 +1917,10 @@ func collectExtractionStats(node *extract.ExtractionNode) extractionStats {
 		default:
 			stats.Other++
 		}
+
+		// Aggregate extension-filtered files recorded at each node.
+		stats.ExtensionFiltered += len(n.ExtensionFilteredPaths)
+		stats.ExtensionFilteredPaths = append(stats.ExtensionFilteredPaths, n.ExtensionFilteredPaths...)
 
 		for _, child := range n.Children {
 			walk(child)

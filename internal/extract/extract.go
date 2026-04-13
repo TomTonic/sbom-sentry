@@ -105,6 +105,10 @@ type ExtractionNode struct {
 	Duration      time.Duration       // time taken for extraction
 	EntriesCount  int                 // number of entries extracted
 	TotalSize     int64               // total uncompressed size of extracted entries
+	// ExtensionFilteredPaths lists delivery paths of direct-child files that were
+	// excluded by the configured SkipExtensions filter. They are kept here rather
+	// than in Children so the tree stays compact while the audit trail is complete.
+	ExtensionFilteredPaths []string
 }
 
 // Extract recursively processes the given file according to configuration.
@@ -320,6 +324,13 @@ func recurseIntoDir(ctx context.Context, parent *ExtractionNode, dir string, par
 				parent.Children = append(parent.Children, child)
 				return err
 			}
+		}
+
+		// Extension-filtered nodes are recorded in a separate list for the audit
+		// trail without cluttering the container tree.
+		if child.Status == StatusSkipped && strings.HasPrefix(child.StatusDetail, "extension filter:") {
+			parent.ExtensionFilteredPaths = append(parent.ExtensionFilteredPaths, child.Path)
+			continue
 		}
 
 		// Only add children that are actual container/archive nodes, not plain files.
