@@ -752,7 +752,7 @@ type ReportData struct {
     Scans            []scan.ScanResult
     PolicyDecisions  []policy.Decision
     SandboxInfo      SandboxSummary
-  ProcessingIssues []ProcessingIssue
+    ProcessingIssues []ProcessingIssue
     StartTime        time.Time
     EndTime          time.Time
 }
@@ -763,6 +763,15 @@ func GenerateHuman(data ReportData, lang string, w io.Writer) error
 // GenerateMachine writes a structured JSON report.
 func GenerateMachine(data ReportData, w io.Writer) error
 ```
+
+**Implementation layout (current):**
+
+- `report.go`: public API, input summary hashing, machine-report entry wiring, and shared report models.
+- `report_i18n.go`: localized string catalog and language selection (`en`, `de`).
+- `report_human_main.go`: human Markdown section orchestration, summary/progress sections, and processing-issues appendix.
+- `report_suppression.go`: suppression appendix rendering and replacement-link resolution.
+- `report_occurrence.go`: component occurrence indexing, quality filtering, and deterministic duplicate collapsing.
+- `report_stats_tree.go`: extraction-tree rendering, residual-risk section, and phase statistics collectors.
 
 **Required content (per DESIGN.md §10.4):**
 
@@ -787,13 +796,17 @@ func GenerateMachine(data ReportData, w io.Writer) error
 - Human-readable output is Markdown (renders well in terminals, browsers, and
   PDF pipelines).
 - Machine-readable output is JSON matching a documented schema.
-- i18n uses Go `embed` with simple template files per language. No heavy
-  localization framework. Two languages: EN (default), DE.
+- i18n uses compile-time string bundles (`translations` struct), not runtime
+  template loading, to keep output deterministic and easy to audit.
 - The report is generated after all processing is complete, from a read-only
   snapshot of the processing state.
 - Processing-stage errors are captured as structured `ProcessingIssue` entries
   and included in both human and machine reports.
 - The report distinguishes explicit root metadata input from derived defaults.
+- A full migration to a template engine is intentionally deferred: the current
+  report has high logic density (ordering, conditional sections, and
+  provenance-driven tables), where direct writer functions are simpler and
+  less error-prone for deterministic audit output.
 
 ---
 
