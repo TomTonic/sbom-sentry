@@ -174,6 +174,29 @@ temp (`/tmp` on Linux/macOS). Useful for:
 - Debugging: inspect unprocessed extractions (preserved if scan fails)
 - Disk isolation: keep temporary files separate from output
 
+**`--config`**
+
+Path to a YAML configuration file. If not provided, extract-sbom will look
+for `.extract-sbom.yaml` or `.extract-sbom.yml` in the current directory and
+the user's home directory; an explicit `--config` overrides auto-discovery.
+
+**`--format`**
+
+SBOM output format. Currently the tool only supports `cyclonedx-json`.
+
+**`--parallel`**
+
+Number of concurrent Syft scan workers. Default follows `GOMAXPROCS` and
+is capped at 16; increase for better throughput on many-core machines,
+or decrease to reduce memory usage.
+
+**`--skip-extensions`**
+
+Comma-separated list of file extensions (with leading dot) to exclude from
+recursive extraction and Syft-native scanning (for example:
+`.docx,.xlsx,.pdf`). This overrides the built-in default list. Pass an empty
+string to explicitly disable extension filtering.
+
 ### Policy and Interpretation
 
 **`--policy strict|partial` (default: partial)**
