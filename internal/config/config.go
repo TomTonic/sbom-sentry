@@ -89,7 +89,7 @@ func ParsePolicyMode(s string) (PolicyMode, error) {
 	case "partial":
 		return PolicyPartial, nil
 	default:
-		return PolicyStrict, fmt.Errorf("unknown policy mode: %q (valid: strict, partial)", s)
+		return PolicyPartial, fmt.Errorf("unknown policy mode: %q (valid: strict, partial)", s)
 	}
 }
 
