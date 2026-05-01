@@ -194,6 +194,8 @@ func Run(ctx context.Context, sbomPath string, enabled bool, bom *cdx.BOM) *Resu
 	return result
 }
 
+// applyCoverage sets CoverageByBOMRef for each bom-ref based on whether matches
+// were found or the component is assessable via PURL/CPE.
 func applyCoverage(result *Result, bom *cdx.BOM) {
 	for _, ref := range collectBOMRefs(bom) {
 		matches := result.MatchesByBOMRef[ref]
@@ -209,12 +211,16 @@ func applyCoverage(result *Result, bom *cdx.BOM) {
 	}
 }
 
+// applyUnavailableCoverage marks every bom-ref CoverageNotAssessable when grype
+// could not be executed successfully.
 func applyUnavailableCoverage(result *Result, bom *cdx.BOM) {
 	for _, ref := range collectBOMRefs(bom) {
 		result.CoverageByBOMRef[ref] = CoverageNotAssessable
 	}
 }
 
+// collectBOMRefs returns a deduplicated, sorted slice of non-empty bom-ref
+// values from the BOM component list.
 func collectBOMRefs(bom *cdx.BOM) []string {
 	if bom == nil || bom.Components == nil {
 		return nil
@@ -231,6 +237,8 @@ func collectBOMRefs(bom *cdx.BOM) []string {
 	return uniqueSortedStrings(refs)
 }
 
+// findBOMComponentByRef returns the first BOM component whose BOMRef equals ref,
+// or nil when not found.
 func findBOMComponentByRef(bom *cdx.BOM, ref string) *cdx.Component {
 	if bom == nil || bom.Components == nil {
 		return nil
@@ -243,6 +251,8 @@ func findBOMComponentByRef(bom *cdx.BOM, ref string) *cdx.Component {
 	return nil
 }
 
+// isAssessableComponent reports whether comp has a non-empty PURL or CPE that
+// grype can use to look up vulnerabilities.
 func isAssessableComponent(comp *cdx.Component) bool {
 	if comp == nil {
 		return false
@@ -250,6 +260,7 @@ func isAssessableComponent(comp *cdx.Component) bool {
 	return strings.TrimSpace(comp.PackageURL) != "" || strings.TrimSpace(comp.CPE) != ""
 }
 
+// normalizeSeverity lowercases and trims raw, returning "unknown" for empty input.
 func normalizeSeverity(raw string) string {
 	s := strings.ToLower(strings.TrimSpace(raw))
 	switch s {
@@ -263,6 +274,7 @@ func normalizeSeverity(raw string) string {
 	}
 }
 
+// severityRank returns a numeric sort key for severity s (0=critical … 5=unknown).
 func severityRank(s string) int {
 	switch normalizeSeverity(s) {
 	case "critical":
@@ -280,6 +292,7 @@ func severityRank(s string) int {
 	}
 }
 
+// uniqueSortedStrings returns a deduplicated, sorted copy of values.
 func uniqueSortedStrings(values []string) []string {
 	if len(values) == 0 {
 		return nil
