@@ -535,7 +535,7 @@ Every removed component is still traceable: the audit report lists the
 suppressed entry, its delivery path, the reason for suppression, and the kept
 replacement component.
 
-### 8.2 Planned Vulnerability Enrichment Rendering (`--grype`)
+### 8.2 Vulnerability Enrichment Rendering (`--grype`)
 
 When `--grype` is enabled, the report adds two vulnerability-focused views that
 remain linked to the same component object IDs used throughout the SBOM and
@@ -543,19 +543,20 @@ occurrence index.
 
 **Summary-level vulnerability table (prominent placement).**
 
-- Rows are grouped and ordered by severity: `critical`, `high`, `medium`,
-  `low`, `negligible`, `unknown`.
-- Each row links to the corresponding component section in the occurrence index.
-- Counts remain deterministic by sorting first by severity rank, then by
-  component object ID, then by vulnerability ID.
+- Columns: `Name`, `Installed`, `Fixed In`, `Vulnerability`, `Severity`
+  (with CVSS score when available), `EPSS`, `Risk`, `KEV`.
+- `Name` links to the matching component section in the occurrence index.
+- Rendering remains deterministic. Row order is driven by risk context first
+  (`risk`, `KEV`, EPSS percentile/value), then severity rank, then stable
+  lexical tie-breakers.
 
 **Per-component vulnerability section.**
 
 Every indexed component gets exactly one explicit vulnerability coverage status:
 
-- `Found`: at least one correlated vulnerability match with full metadata
-  (ID, severity, fix state/version when available, and source references such
-  as CVE/NVD/GHSA links).
+- `Found`: at least one correlated vulnerability match with full metadata,
+  including package type, risk, KEV, fix state/versions, CVSS
+  version/score/vector, description, EPSS, and source references.
 - `None`: Grype evaluated the component and reported no matches.
 - `NotAssessable`: vulnerability matching could not be performed for this
   component (for example missing PURL/CPE) or enrichment was unavailable.

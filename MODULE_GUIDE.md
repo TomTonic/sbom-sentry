@@ -793,9 +793,10 @@ func GenerateMachine(data ReportData, w io.Writer) error
 - Optional evidence paths where component identification relied on internal
   files rather than a single physical artifact
 - Whether unsafe override was active
-- Vulnerability summary table in the report summary, sorted by severity
-  (`critical`, `high`, `medium`, `low`, `negligible`, `unknown`), with links
-  to the corresponding component sections
+- Vulnerability summary table in the report summary with columns for name,
+  installed/fixed versions, vulnerability ID, severity (incl. CVSS score),
+  EPSS, risk, and KEV; rows link to corresponding component sections and are
+  deterministically ordered with risk context before severity tie-breakers
 - Per-component vulnerability status in the component occurrence index:
   - vulnerabilities found (with full Grype metadata and source references)
   - no vulnerabilities found
@@ -1328,7 +1329,8 @@ For vulnerability-enrichment tests, fixture runs must capture both:
 - raw Grype JSON (including vulnerability source references)
 - expected report snippets (summary table rows + linked component sections)
 
-to ensure stable rendering and deterministic severity ordering across releases.
+to ensure stable rendering and deterministic vulnerability row ordering across
+releases.
 
 ---
 

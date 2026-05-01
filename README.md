@@ -87,6 +87,21 @@ inspection: one file in, one consolidated CycloneDX SBOM and one auditable repor
 - Assembles one deterministic CycloneDX 1.6 SBOM
 - Generates an auditable report in English or German
 
+## Optional Vulnerability Enrichment (`--grype`)
+
+If `--grype` is enabled, extract-sbom runs Grype against the generated SBOM and
+enriches the audit report without changing SBOM structure or extraction/scan decisions.
+
+- Summary view: grype-inspired vulnerability table with `Name`, installed/fixed versions,
+  vulnerability ID, severity (including CVSS score when available), EPSS, risk, and KEV.
+- Detail view: per-component vulnerability status (`found`, `none`, `not-assessable`) in the
+  component occurrence index, including type, fix data, CVSS version/score/vector,
+  description, EPSS, and source references when available.
+- Runtime diagnostics: Grype version/database metadata and explicit enrichment state
+  (`completed`, `completed-with-errors`, `unavailable`, `not-requested`).
+- Failure behavior: if Grype is missing or returns invalid/unusable output, SBOM and report
+  are still generated; the report records enrichment as unavailable/incomplete.
+
 ## Quick Start
 
 Install a prebuilt release binary (see [INSTALL.md](INSTALL.md)) or build

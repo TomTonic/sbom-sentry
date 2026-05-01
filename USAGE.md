@@ -3,17 +3,35 @@
 This guide explains extract-sbom in scenario form: what to run, which parameters
 matter, and which outputs to expect.
 
-## Quickstart: generate an SBOM and scan with Grype
+## Quickstart: generate an SBOM with integrated `--grype` enrichment
 
-This short quickstart shows how to use `extract-sbom` to generate a
-CycloneDX SBOM, scan it with [Grype](https://github.com/anchore/grype), and
-filter the results using [jq](https://jqlang.org/). Grype is an open-source
-vulnerability scanner from Anchore for SBOMs, container images, and
-filesystems. jq is a lightweight tool for processing JSON output in CI or
-local workflows.
+This quickstart runs the complete incoming-inspection flow in one command:
+SBOM generation plus optional Grype-based vulnerability enrichment for the
+human/machine report.
 
 ```bash
-# 1) Create output directory and generate SBOM
+# 1) Create output directory and run extract-sbom with enrichment
+mkdir -p out
+./extract-sbom --unsafe --grype --output-dir out vendor-delivery.zip
+
+# 2) Inspect outputs
+ls -1 out/
+```
+
+Expected outputs:
+
+- `out/vendor-delivery.cdx.json`
+- `out/vendor-delivery.report.md` (or `.report.json` with `--report machine`)
+
+The report now includes a vulnerability summary table and per-component details.
+
+### Optional: run Grype manually and post-filter with jq
+
+If you need raw Grype JSON for external automation, you can still run Grype
+separately and filter with [jq](https://jqlang.org/).
+
+```bash
+# 1) Generate SBOM
 mkdir -p out
 ./extract-sbom --unsafe --output-dir out vendor-delivery.zip
 
@@ -73,9 +91,10 @@ Expected behavior:
 - SBOM generation remains unchanged and deterministic.
 - extract-sbom attempts to run Grype on the generated SBOM and enriches the report.
 - The report contains:
-  - a prominent vulnerability summary table ordered by severity
+  - a prominent vulnerability summary table with severity (incl. CVSS score), EPSS, risk, and KEV
   - links from summary rows to component sections
   - per-component status: vulnerabilities found, none found, or not assessable
+  - per-finding details including type, fix data, CVSS version/score/vector, description, and references
   - Grype runtime metadata (binary version and DB metadata)
 - If Grype is missing or fails, SBOM and report are still produced and the
   report explicitly documents that enrichment could not be completed.
@@ -329,7 +348,8 @@ Enables optional report enrichment by invoking Grype on the generated SBOM.
 
 - Scope: report enrichment only; no change to extraction, scan, or SBOM assembly.
 - Correlation: Grype matches are mapped to component object IDs (`bom-ref`).
-- Report effect: summary table by severity and detailed per-component findings.
+- Report effect: grype-inspired summary table (`Name`, installed/fixed versions, vulnerability,
+  severity with CVSS score, EPSS, risk, KEV) and detailed per-component findings.
 - Failure handling: if Grype cannot run, report records enrichment as unavailable.
 
 **`--progress quiet|normal|verbose` (default: normal)**
