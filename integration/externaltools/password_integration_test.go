@@ -202,14 +202,14 @@ func TestEncryptedZIPNestedInsidePlainZIP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := fw.Write(innerData); err != nil {
-		t.Fatal(err)
+	if _, writeErr := fw.Write(innerData); writeErr != nil {
+		t.Fatal(writeErr)
 	}
-	if err := w.Close(); err != nil {
-		t.Fatal(err)
+	if closeErr := w.Close(); closeErr != nil {
+		t.Fatal(closeErr)
 	}
-	if err := outerZipFile.Close(); err != nil {
-		t.Fatal(err)
+	if closeErr := outerZipFile.Close(); closeErr != nil {
+		t.Fatal(closeErr)
 	}
 
 	cfg := config.DefaultConfig()
@@ -264,16 +264,16 @@ func TestEncryptedZIPDetectionFromFakeHeader(t *testing.T) {
 	// Local file header with encryption bit set.
 	lhdr := []byte{0x50, 0x4B, 0x03, 0x04, 0x14, 0x00, 0x01, 0x00, 0x00, 0x00,
 		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
-	lhdr = binary.LittleEndian.AppendUint16(lhdr, uint16(len(nameBytes)))
+	lhdr = binary.LittleEndian.AppendUint16(lhdr, uint16(len(nameBytes))) //nolint:gosec // G115: len() is always non-negative and bounded by ZIP spec max name size
 	lhdr = binary.LittleEndian.AppendUint16(lhdr, 0)
 	lhdr = append(lhdr, nameBytes...)
 	_, _ = f.Write(lhdr)
-	localLen := int32(len(lhdr))
+	localLen := int32(len(lhdr)) //nolint:gosec // G115: test fixture, len is small
 
 	// Central directory entry.
 	cdEntry := []byte{0x50, 0x4B, 0x01, 0x02, 0x14, 0x00, 0x14, 0x00, 0x01, 0x00,
 		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
-	cdEntry = binary.LittleEndian.AppendUint16(cdEntry, uint16(len(nameBytes)))
+	cdEntry = binary.LittleEndian.AppendUint16(cdEntry, uint16(len(nameBytes))) //nolint:gosec // G115: test fixture, bounded by ZIP spec
 	cdEntry = binary.LittleEndian.AppendUint16(cdEntry, 0)
 	cdEntry = binary.LittleEndian.AppendUint16(cdEntry, 0)
 	cdEntry = binary.LittleEndian.AppendUint16(cdEntry, 0)
@@ -283,7 +283,7 @@ func TestEncryptedZIPDetectionFromFakeHeader(t *testing.T) {
 	cdEntry = append(cdEntry, nameBytes...)
 	cdOffset := localLen
 	_, _ = f.Write(cdEntry)
-	cdLen := int32(len(cdEntry))
+	cdLen := int32(len(cdEntry)) //nolint:gosec // G115: test fixture, bounded by ZIP spec
 
 	// End of central directory.
 	eocd := []byte{0x50, 0x4B, 0x05, 0x06, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00}

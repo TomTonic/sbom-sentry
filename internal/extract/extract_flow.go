@@ -105,8 +105,20 @@ func extractRecursive(ctx context.Context, node *ExtractionNode, filePath string
 	}
 
 	switch info.Format {
-	case identify.ZIP, identify.TAR, identify.GzipTAR, identify.Bzip2TAR, identify.XzTAR, identify.ZstdTAR:
+	case identify.ZIP, identify.TAR:
 		err = extract7zWithPasswords(extractCtx, node, filePath, sb, cfg.WorkDir, cfg.Limits, cfg.Passwords)
+	case identify.GzipTAR, identify.Bzip2TAR, identify.XzTAR, identify.ZstdTAR:
+		err = extract7zWithPasswords(extractCtx, node, filePath, sb, cfg.WorkDir, cfg.Limits, cfg.Passwords)
+		// 7-Zip decompresses .tar.gz / .tgz / .tar.bz2 / .tar.xz / .tar.zst to a
+		// single intermediate .tar file rather than extracting the tar contents
+		// directly. Flatten that extra level so that the delivery-path hierarchy
+		// mirrors the logical archive structure (e.g. foo.tar.gz/file.txt instead
+		// of foo.tar.gz/foo.tar/file.txt).
+		if err == nil && node.Status == StatusExtracted {
+			if flatErr := flattenCompressedTAR(extractCtx, node, sb, cfg); flatErr != nil {
+				return flatErr
+			}
+		}
 	case identify.CAB, identify.SevenZip, identify.RAR:
 		err = extract7zWithPasswords(extractCtx, node, filePath, sb, cfg.WorkDir, cfg.Limits, cfg.Passwords)
 	case identify.MSI:
@@ -259,4 +271,47 @@ func isSkippedExtension(filePath string, skipList []string) bool {
 		}
 	}
 	return false
+}
+
+// flattenCompressedTAR unwraps the intermediate .tar file that 7-Zip produces
+// when decompressing a compressed TAR archive (.tar.gz, .tgz, .tar.bz2, etc.).
+//
+// 7-Zip treats a compressed TAR as two separate layers: it decompresses the
+// outer compression wrapper first (producing a .tar file), then requires a
+// second extraction pass to unpack the .tar contents. Without flattening, this
+// would add an extra level to every delivery path
+// (e.g. foo.tar.gz/foo.tar/lib/file.jar instead of foo.tar.gz/lib/file.jar).
+//
+// Flattening is applied only when the extraction produced exactly one file and
+// that file has a .tar extension. If the inner .tar extraction fails, the outer
+// extraction result is kept as-is.
+func flattenCompressedTAR(ctx context.Context, node *ExtractionNode, sb sandbox.Sandbox, cfg config.Config) error {
+	entries, err := os.ReadDir(node.ExtractedDir)
+	if err != nil || len(entries) != 1 || entries[0].IsDir() {
+		return nil
+	}
+	name := entries[0].Name()
+	if !strings.HasSuffix(strings.ToLower(name), ".tar") {
+		return nil
+	}
+
+	tarPath := filepath.Join(node.ExtractedDir, name)
+	oldDir := node.ExtractedDir
+
+	innerNode := &ExtractionNode{Path: node.Path}
+	if extractErr := extract7zWithPasswords(ctx, innerNode, tarPath, sb, cfg.WorkDir, cfg.Limits, cfg.Passwords); extractErr != nil {
+		return extractErr
+	}
+
+	if innerNode.Status != StatusExtracted {
+		// Inner .tar extraction failed; keep the outer result unchanged.
+		return nil
+	}
+
+	// Adopt the inner extraction dir and counts; discard the intermediate dir.
+	os.RemoveAll(oldDir)
+	node.ExtractedDir = innerNode.ExtractedDir
+	node.EntriesCount = innerNode.EntriesCount
+	node.TotalSize = innerNode.TotalSize
+	return nil
 }

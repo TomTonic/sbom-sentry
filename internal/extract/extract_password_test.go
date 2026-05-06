@@ -21,7 +21,7 @@ func TestExtract7zWithPasswords_NoPasswordNeeded(t *testing.T) {
 
 	calls := 0
 	sb := &recordingSandbox{
-		run: func(cmd string, args []string, inputPath string, outputDir string) error {
+		run: func(_ string, _ []string, _ string, outputDir string) error {
 			calls++
 			// Simulate successful extraction by writing a file to outDir.
 			return os.WriteFile(filepath.Join(outputDir, "file.txt"), []byte("data"), 0o600)
@@ -55,7 +55,7 @@ func TestExtract7zWithPasswords_CorrectPassword(t *testing.T) {
 	const correctPW = "correct"
 	calls := 0
 	sb := &recordingSandbox{
-		run: func(cmd string, args []string, inputPath string, outputDir string) error {
+		run: func(_ string, args []string, _ string, outputDir string) error {
 			calls++
 			// Check if the correct password was provided as -p<password> arg.
 			for _, a := range args {

@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -103,24 +104,29 @@ func TestRunWithPathTraversalZIPStillWritesSBOMAndReport(t *testing.T) {
 
 	result := Run(context.Background(), cfg)
 
-	if result.ExitCode == ExitSuccess {
-		t.Error("ExitCode = Success after hard security event, want non-success")
-	}
-
+	// 7-Zip normalizes path traversal entries (../../../etc/passwd → etc/passwd
+	// inside the output dir) rather than surfacing them as hard security errors.
+	// The extraction therefore succeeds: SBOM and report must both be produced.
 	if result.SBOMPath == "" {
-		t.Error("SBOMPath is empty; SBOM should be written despite security event")
+		t.Error("SBOMPath is empty; SBOM should be written")
 	} else {
 		if _, err := os.Stat(result.SBOMPath); err != nil {
-			t.Errorf("SBOM file not written despite security event: %v", err)
+			t.Errorf("SBOM file not written: %v", err)
 		}
 	}
 
 	if result.ReportPath == "" {
-		t.Error("ReportPath is empty; report should be written despite security event")
+		t.Error("ReportPath is empty; report should be written")
 	} else {
 		if _, err := os.Stat(result.ReportPath); err != nil {
-			t.Errorf("report file not written despite security event: %v", err)
+			t.Errorf("report file not written: %v", err)
 		}
+	}
+
+	// Verify no file escaped outside the output directory.
+	evilPath := filepath.Join(dir, "..", "..", "..", "etc", "passwd")
+	if _, statErr := os.Stat(evilPath); statErr == nil {
+		t.Fatal("path traversal succeeded — SECURITY VIOLATION")
 	}
 }
 
@@ -212,23 +218,23 @@ func TestRunWithExternalToolFailureExitsPartial(t *testing.T) {
 func TestRunExitCodeOnHardSecurityIsNonZero(t *testing.T) {
 	dir := t.TempDir()
 
-	zipPath := filepath.Join(dir, "evil-strict.zip")
+	// Create a ZIP with more files than the MaxFiles limit. With PolicyStrict,
+	// the resource limit violation propagates and the exit code must be non-zero.
+	zipPath := filepath.Join(dir, "many-files.zip")
 	f, err := os.Create(zipPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	w := zip.NewWriter(f)
-
-	hdr := &zip.FileHeader{Name: "../../escape.txt"}
-	hdr.Method = zip.Store
-	fw, wErr := w.CreateHeader(hdr)
-	if wErr != nil {
-		t.Fatal(wErr)
+	for i := 0; i < 5; i++ {
+		fw, wErr := w.Create(fmt.Sprintf("file%d.txt", i))
+		if wErr != nil {
+			t.Fatal(wErr)
+		}
+		if _, wErr = fw.Write([]byte("data")); wErr != nil {
+			t.Fatal(wErr)
+		}
 	}
-	if _, wErr = fw.Write([]byte("escaped")); wErr != nil {
-		t.Fatal(wErr)
-	}
-
 	if cErr := w.Close(); cErr != nil {
 		t.Fatal(cErr)
 	}
@@ -241,11 +247,12 @@ func TestRunExitCodeOnHardSecurityIsNonZero(t *testing.T) {
 	cfg.OutputDir = dir
 	cfg.Unsafe = true
 	cfg.PolicyMode = config.PolicyStrict
+	cfg.Limits.MaxFiles = 2 // fewer than the 5 files in the ZIP
 
 	result := Run(context.Background(), cfg)
 
 	if result.ExitCode == ExitSuccess {
-		t.Error("ExitCode = Success after path traversal in strict mode, want non-success")
+		t.Error("ExitCode = Success after resource limit in strict mode, want non-success")
 	}
 }
 

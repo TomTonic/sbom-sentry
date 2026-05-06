@@ -39,8 +39,8 @@ func TestExtractTARGZProducesExtractionTree(t *testing.T) {
 		t.Errorf("root status = %v, want Extracted", tree.Status)
 	}
 
-	if tree.EntriesCount != 1 {
-		t.Errorf("EntriesCount = %d, want 1 (inner .tar file)", tree.EntriesCount)
+	if tree.EntriesCount != 2 {
+		t.Errorf("EntriesCount = %d, want 2", tree.EntriesCount)
 	}
 
 	CleanupNode(tree)

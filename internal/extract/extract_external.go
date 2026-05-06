@@ -134,8 +134,15 @@ func extract7zWithPasswords(ctx context.Context, node *ExtractionNode, filePath 
 		// failure) and try the next candidate.
 	}
 
-	node.Status = StatusFailed
-	node.StatusDetail = "encrypted archive: extraction failed (no matching password found)"
+	// All candidates exhausted. If we tried at least one password (beyond the
+	// no-password attempt), emit a clear "no matching password" message.
+	// If only the no-password attempt was made (no passwords were configured),
+	// the StatusDetail already carries the raw 7-Zip or sandbox error — keep it
+	// so sandbox-denial and tool-crash errors are not masked.
+	if len(candidates) > 1 {
+		node.Status = StatusFailed
+		node.StatusDetail = "encrypted archive: extraction failed (no matching password found)"
+	}
 	return nil
 }
 
