@@ -301,6 +301,15 @@ func summarizeToolError(err error) string {
 		if line == "" {
 			continue
 		}
+		// Strip the sandbox stderr-prefix FIRST so that section headers
+		// that appear on the first stderr line (e.g. "stderr: ERRORS:") are
+		// still recognised by the switch below.
+		if strings.HasPrefix(line, "stderr:") {
+			line = strings.TrimSpace(strings.TrimPrefix(line, "stderr:"))
+			if line == "" {
+				continue
+			}
+		}
 		switch line {
 		case "ERRORS:":
 			section = sectionErrors
@@ -310,12 +319,6 @@ func summarizeToolError(err error) string {
 			continue
 		case "--":
 			continue
-		}
-		if strings.HasPrefix(line, "stderr:") {
-			line = strings.TrimSpace(strings.TrimPrefix(line, "stderr:"))
-			if line == "" {
-				continue
-			}
 		}
 		if isToolNoiseLine(line) {
 			continue
@@ -332,16 +335,37 @@ func summarizeToolError(err error) string {
 	}
 
 	if len(errors) > 0 {
+		parts := limitStrings(errors, 3)
+		extra := len(errors) - len(parts)
 		if len(warnings) > 0 {
-			return strings.Join(append(limitStrings(errors, 2), "warning: "+warnings[0]), "; ")
+			parts = append(parts, "warning: "+warnings[0])
 		}
-		return strings.Join(limitStrings(errors, 2), "; ")
+		result := strings.Join(parts, "; ")
+		if extra > 0 {
+			result += fmt.Sprintf("; [%d more error(s)]", extra)
+		}
+		return result
 	}
 	if len(generic) > 0 {
-		return generic[0]
+		// Return all captured non-noise lines so that unrecognised or
+		// localised output variants never silently lose information.
+		parts := limitStrings(generic, 3)
+		extra := len(generic) - len(parts)
+		if len(warnings) > 0 {
+			parts = append(parts, "warning: "+warnings[0])
+		}
+		result := strings.Join(parts, "; ")
+		if extra > 0 {
+			result += fmt.Sprintf("; [%d more line(s)]", extra)
+		}
+		return result
 	}
 	if len(warnings) > 0 {
-		return "warning: " + warnings[0]
+		parts := make([]string, 0, min(len(warnings), 2))
+		for _, w := range limitStrings(warnings, 2) {
+			parts = append(parts, "warning: "+w)
+		}
+		return strings.Join(parts, "; ")
 	}
 	return strings.TrimSpace(err.Error())
 }
@@ -351,7 +375,11 @@ func isToolNoiseLine(line string) bool {
 	if l == "" {
 		return true
 	}
-	if strings.Contains(l, "execution failed") || strings.HasPrefix(l, "sandbox:") {
+	// The sandbox wrapper always prefixes its own error with "sandbox:"; that
+	// line is noise.  The former "execution failed" substring check was
+	// redundant (covered by the prefix) and too broad — it would also
+	// accidentally filter real 7-Zip error messages containing those words.
+	if strings.HasPrefix(l, "sandbox:") {
 		return true
 	}
 	if strings.HasPrefix(l, "7-zip") || strings.HasPrefix(l, "scanning the drive") ||
