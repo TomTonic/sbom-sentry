@@ -134,8 +134,12 @@ func parallelScanIndices(ctx context.Context, root *extract.ExtractionNode, resu
 						}(task.ordinal, len(indices), nodePath)
 					}
 
-					scanNode(ctx, &results[task.resultIndex], root)
-					close(done)
+					// Use defer so the ticker goroutine is always unblocked, even
+					// if scanNode panics (e.g. due to a Syft library panic).
+					func() {
+						defer close(done)
+						scanNode(ctx, &results[task.resultIndex], root)
+					}()
 
 					duration := time.Since(start).Round(time.Millisecond)
 					componentCount := 0

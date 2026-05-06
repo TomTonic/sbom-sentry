@@ -541,7 +541,7 @@ func lookPathImpl(file string) (string, error) {
 	path := os.Getenv("PATH")
 	for _, dir := range strings.Split(path, string(os.PathListSeparator)) {
 		full := filepath.Join(dir, file)
-		if info, err := os.Stat(full); err == nil && !info.IsDir() {
+		if info, err := os.Stat(full); err == nil && info.Mode().IsRegular() && (info.Mode()&0o111) != 0 {
 			return full, nil
 		}
 	}

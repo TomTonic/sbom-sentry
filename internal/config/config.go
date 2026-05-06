@@ -420,6 +420,13 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("timeout must be at least 1s, got %s", c.Limits.Timeout)
 	}
 
+	// Guard against unbounded password retry loops: too many passwords can
+	// cause O(n) extraction attempts, each consuming significant disk I/O.
+	const maxPasswords = 10_000
+	if len(c.Passwords) > maxPasswords {
+		return fmt.Errorf("too many passwords: %d (maximum is %d)", len(c.Passwords), maxPasswords)
+	}
+
 	return nil
 }
 

@@ -320,7 +320,24 @@ func parseKeyValue(s string) (string, string, bool) {
 //
 // This function does not log or print the passwords it reads. Callers must
 // ensure the returned slice is never written to any log or report.
+//
+// The file must not exceed maxPasswordFileBytes in size and must contain
+// no more than maxPasswordCount non-empty, non-comment lines. These caps
+// prevent DoS via unbounded password-retry loops.
+const (
+	maxPasswordFileBytes = 1 * 1024 * 1024 // 1 MiB
+	maxPasswordCount     = 10_000
+)
+
 func loadPasswordFile(path string) ([]string, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, fmt.Errorf("open password file %q: %w", path, err)
+	}
+	if info.Size() > maxPasswordFileBytes {
+		return nil, fmt.Errorf("password file %q exceeds %d-byte limit (%d bytes)", path, maxPasswordFileBytes, info.Size())
+	}
+
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("open password file %q: %w", path, err)
@@ -333,6 +350,9 @@ func loadPasswordFile(path string) ([]string, error) {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
+		}
+		if len(passwords) >= maxPasswordCount {
+			return nil, fmt.Errorf("password file %q exceeds %d-password limit", path, maxPasswordCount)
 		}
 		passwords = append(passwords, line)
 	}
