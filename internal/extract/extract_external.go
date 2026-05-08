@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/TomTonic/extract-sbom/internal/config"
 	"github.com/TomTonic/extract-sbom/internal/safeguard"
@@ -19,6 +20,64 @@ import (
 // 7zz is the official 7-Zip binary (package: 7zip on Debian/Ubuntu ≥22.04).
 // 7za and 7z are provided by p7zip-full and are CLI-compatible for extraction.
 var sevenZipCandidates = []string{"7zz", "7za", "7z"}
+
+// lazily captured tool versions — populated on first successful use.
+var (
+	sevenZipVersionOnce  sync.Once
+	sevenZipVersionValue string
+	unshieldVersionOnce  sync.Once
+	unshieldVersionValue string
+)
+
+// captureSevenZipVersion runs "binary i" once and stores the first non-empty
+// line up to the " : " separator as the version identifier
+// (e.g. "7-Zip (z) 26.01 (arm64)").
+func captureSevenZipVersion(binary string) {
+	sevenZipVersionOnce.Do(func() {
+		out, err := exec.Command(binary, "i").Output() //nolint:gosec // binary is from a fixed candidate list
+		if err != nil {
+			return
+		}
+		for _, line := range strings.Split(string(out), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			if idx := strings.Index(line, " : "); idx != -1 {
+				sevenZipVersionValue = line[:idx]
+			} else {
+				sevenZipVersionValue = line
+			}
+			return
+		}
+	})
+}
+
+// captureUnshieldVersion runs "unshield --version" once and stores the
+// result up to (not including) the first period (e.g. "Unshield version 1.6.2").
+func captureUnshieldVersion() {
+	unshieldVersionOnce.Do(func() {
+		out, err := exec.Command("unshield", "--version").Output() //nolint:gosec // fixed binary name
+		if err != nil {
+			return
+		}
+		s := strings.TrimSpace(string(out))
+		// "Unshield version 1.6.2. MIT License..." — keep through the version number.
+		if idx := strings.Index(s, ". "); idx != -1 {
+			unshieldVersionValue = strings.TrimSpace(s[:idx])
+		} else {
+			unshieldVersionValue = s
+		}
+	})
+}
+
+// GetUsedSevenZipVersion returns the 7-Zip version string captured on first
+// use, or an empty string if 7-Zip was never invoked during this run.
+func GetUsedSevenZipVersion() string { return sevenZipVersionValue }
+
+// GetUsedUnshieldVersion returns the unshield version string captured on first
+// use, or an empty string if unshield was never invoked during this run.
+func GetUsedUnshieldVersion() string { return unshieldVersionValue }
 
 // resolve7zBinary returns the first available 7-Zip binary name and true,
 // or ("7zz", false) if none is found (7zz is used as the canonical name in
@@ -45,6 +104,7 @@ func extract7z(ctx context.Context, node *ExtractionNode, filePath string, sb sa
 		node.Tool = binary
 		return nil
 	}
+	captureSevenZipVersion(binary)
 
 	outDir, err := os.MkdirTemp(workDir, "extract-sbom-7z-*")
 	if err != nil {
@@ -167,6 +227,7 @@ func extractUnshield(ctx context.Context, node *ExtractionNode, filePath string,
 		node.Tool = "unshield"
 		return nil
 	}
+	captureUnshieldVersion()
 
 	// Build candidate list: no-password first, then each supplied password.
 	type attempt struct {

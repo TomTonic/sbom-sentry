@@ -247,6 +247,19 @@ func Run(ctx context.Context, cfg config.Config) Result {
 	endTime := time.Now()
 	buildReportData := func() report.ReportData {
 		processingIssues := append([]report.ProcessingIssue(nil), issues...)
+		toolVersions := report.ToolVersions{
+			SevenZip: extract.GetUsedSevenZipVersion(),
+			Unshield: extract.GetUsedUnshieldVersion(),
+		}
+		if vulnResult != nil && vulnResult.GrypeVersion != "" {
+			toolVersions.Grype = "grype " + vulnResult.GrypeVersion
+			if vulnResult.DBSchemaVersion != "" {
+				toolVersions.GrypeDB = "db: " + vulnResult.DBSchemaVersion
+				if vulnResult.DBBuilt != "" {
+					toolVersions.GrypeDB += ", built " + vulnResult.DBBuilt
+				}
+			}
+		}
 		return report.ReportData{
 			Input:            inputSummary,
 			Generator:        generatorInfo,
@@ -262,6 +275,7 @@ func Run(ctx context.Context, cfg config.Config) Result {
 			BOM:              assembledBOM,
 			SBOMPath:         sbomPath,
 			Suppressions:     suppressions,
+			ToolVersions:     toolVersions,
 		}
 	}
 

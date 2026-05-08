@@ -9,6 +9,7 @@ import (
 	"github.com/TomTonic/extract-sbom/internal/assembly"
 	"github.com/TomTonic/extract-sbom/internal/extract"
 	"github.com/TomTonic/extract-sbom/internal/policy"
+	"github.com/TomTonic/extract-sbom/internal/vulnscan"
 )
 
 // writeRootMetadata writes the root-component metadata table and marks whether
@@ -187,17 +188,21 @@ func writePolicyDecisions(w io.Writer, decisions []policy.Decision, t translatio
 // writeSummary renders the executive summary with sub-sections for analysis
 // overview, key findings, and vulnerability summary.
 func writeSummary(w io.Writer, data ReportData, ext extractionStats, scn scanStats, pol policyStats, idx componentIndexStats, occurrences []componentOccurrence, t translations) {
-	suppression := collectSuppressionStats(data.Suppressions)
-
-	fmt.Fprintln(w, t.summaryLead)
+	if vulnerabilityRequested(data.Vulnerabilities) {
+		fmt.Fprintln(w, t.summaryLead)
+	} else {
+		fmt.Fprintln(w, t.summaryLeadNoVuln)
+	}
 	fmt.Fprintln(w)
 
 	writeAnchoredHeading(w, 3, t.summaryAnalysisSection, anchorSummaryAnalysis)
-	writeAnalysisOverview(w, ext, scn, suppression, idx, t)
+	writeAnalysisOverview(w, ext, idx, t)
 	fmt.Fprintln(w)
 
 	writeAnchoredHeading(w, 3, t.summaryKeyFindingsSection, anchorSummaryKeyFindings)
-	findings := summarizeFindings(ext, scn, idx, pol, len(data.ProcessingIssues), t)
+	vulnMatches, vulnUnique, vulnAffected := collectVulnStats(data.Vulnerabilities)
+	distinctPackages := countDistinctPackages(occurrences)
+	findings := summarizeFindings(ext, scn, idx, pol, len(data.ProcessingIssues), data.Vulnerabilities, vulnMatches, vulnUnique, vulnAffected, distinctPackages, t)
 	for _, finding := range findings {
 		fmt.Fprintf(w, "- %s\n\n", finding)
 	}
@@ -206,24 +211,52 @@ func writeSummary(w io.Writer, data ReportData, ext extractionStats, scn scanSta
 	writeVulnerabilitySummary(w, data, occurrences, t)
 }
 
-// writeAnalysisOverview writes the prose paragraph that describes the two-phase
-// pipeline and embeds the key processing numbers inline.
-func writeAnalysisOverview(w io.Writer, ext extractionStats, scn scanStats, suppression suppressionStats, idx componentIndexStats, t translations) {
-	removedNonPkg := suppression.FSArtifacts + suppression.LowValueFiles + suppression.WeakDuplicate
+// writeAnalysisOverview writes the prose paragraph that describes what was
+// found, using user-domain language (delivery, packages, PURL).
+func writeAnalysisOverview(w io.Writer, ext extractionStats, idx componentIndexStats, t translations) {
 	fmt.Fprintf(w, "%s\n\n", fmt.Sprintf(
 		t.summaryAnalysisProseTemplate,
-		ext.Total, ext.Extracted,
-		scn.Total, scn.Successful, scn.TotalComponents,
-		removedNonPkg, suppression.PURLDuplicate,
-		idx.IndexedComponents, idx.IndexedWithPURL, idx.IndexedWithoutPURL,
+		ext.Total, idx.IndexedComponents, idx.IndexedWithPURL, idx.IndexedWithoutPURL,
 	))
 	fmt.Fprintf(w, "%s\n", fmt.Sprintf(t.summaryAnalysisMethodRef, sectionLink(t.methodOverviewSection, anchorMethodOverview)))
 }
 
 // summarizeFindings derives short, operator-friendly findings from collected
 // extraction, scan, component-index, policy, and pipeline statistics.
-func summarizeFindings(ext extractionStats, scn scanStats, idx componentIndexStats, pol policyStats, pipelineIssues int, t translations) []string {
-	findings := make([]string, 0, 8)
+// When vulnerability enrichment actually ran, a vulnerability finding bullet
+// is prepended.
+func summarizeFindings(ext extractionStats, scn scanStats, idx componentIndexStats, pol policyStats, pipelineIssues int, v *vulnscan.Result, vulnMatches, vulnUnique, vulnAffected int, distinctPackages int, t translations) []string {
+	findings := make([]string, 0, 12)
+
+	// Delivery composition finding
+	if idx.IndexedComponents > 0 {
+		findings = append(findings, fmt.Sprintf(
+			t.findingDeliveryCompositionTemplate,
+			ext.Extracted, ext.TotalFileEntries, idx.IndexedComponents, distinctPackages,
+		))
+	}
+
+	// Extraction status finding
+	if ext.Failed+ext.SecurityBlocked > 0 {
+		findings = append(findings, fmt.Sprintf(
+			t.findingExtractionStatusFailureTemplate,
+			ext.Failed+ext.SecurityBlocked,
+		))
+	} else if ext.Total > 0 {
+		findings = append(findings, t.findingExtractionStatusSuccessTemplate)
+	}
+
+	if vulnerabilityRequested(v) {
+		if vulnMatches > 0 {
+			findings = append(findings, fmt.Sprintf(
+				t.findingVulnMatchesTemplate,
+				vulnMatches, vulnAffected, vulnUnique,
+				sectionLink(t.summaryVulnSection, anchorSummaryVuln),
+			))
+		} else if v.State == vulnscan.StateCompleted || v.State == vulnscan.StateCompletedWithErrors {
+			findings = append(findings, t.findingVulnNoMatches)
+		}
+	}
 	if ext.ToolMissing > 0 {
 		findings = append(findings, fmt.Sprintf(t.findingToolMissingTemplate, ext.ToolMissing, samplePaths(ext.ToolMissingPaths, t.noneValue)))
 	}
@@ -232,8 +265,6 @@ func summarizeFindings(ext extractionStats, scn scanStats, idx componentIndexSta
 	}
 	if scn.Errors > 0 {
 		findings = append(findings, fmt.Sprintf(t.findingScanFailedTemplate, scn.Errors, samplePaths(scn.ErrorPaths, t.noneValue)))
-	} else if scn.Total > 0 {
-		findings = append(findings, fmt.Sprintf(t.findingAllScansSuccessfulTemplate, scn.Total))
 	}
 	if idx.IndexedComponents > 0 {
 		findings = append(findings, fmt.Sprintf(
@@ -243,18 +274,7 @@ func summarizeFindings(ext extractionStats, scn scanStats, idx componentIndexSta
 		))
 	}
 	if scn.NoComponentTasks > 0 {
-		findings = append(findings, fmt.Sprintf(t.findingNoPackageIdentityTemplate, scn.NoComponentTasks, samplePaths(scn.NoComponentPaths, t.noneValue)))
-	}
-	if idx.FilteredAbsolutePathNames > 0 || idx.FilteredLowValueFileArtifacts > 0 || idx.DuplicateMerged > 0 {
-		findings = append(
-			findings,
-			fmt.Sprintf(
-				t.findingIndexQualityTemplate,
-				idx.FilteredAbsolutePathNames,
-				idx.FilteredLowValueFileArtifacts,
-				idx.DuplicateMerged,
-			),
-		)
+		findings = append(findings, fmt.Sprintf(t.findingNoPackageIdentityTemplate, scn.NoComponentTasks, sectionLink(t.scanNoPackageIDsSection, anchorScanNoPackageIDs), samplePaths(scn.NoComponentPaths, t.noneValue)))
 	}
 	if pol.Total > 0 {
 		findings = append(findings, fmt.Sprintf(t.findingPolicyDecisionsTemplate, pol.Total, sectionLink(t.policySection, anchorPolicy)))
@@ -266,6 +286,21 @@ func summarizeFindings(ext extractionStats, scn scanStats, idx componentIndexSta
 		findings = append(findings, t.findingNoCriticalLimitations)
 	}
 	return findings
+}
+
+func vulnerabilityRequested(v *vulnscan.Result) bool {
+	return v != nil && v.Requested && v.State != vulnscan.StateNotRequested
+}
+
+// countDistinctPackages counts the number of distinct software packages
+// (by name+version pair) in the occurrence list.
+func countDistinctPackages(occurrences []componentOccurrence) int {
+	seen := make(map[string]bool)
+	for i := range occurrences {
+		key := occurrences[i].PackageName + "|" + occurrences[i].Version
+		seen[key] = true
+	}
+	return len(seen)
 }
 
 // writeProcessingIssues prints a bounded table of pipeline/extraction/scan

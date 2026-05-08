@@ -30,10 +30,32 @@ type vulnerabilitySummaryRow struct {
 	KEV             bool
 }
 
+// collectVulnStats returns the total match count, number of unique
+// vulnerability IDs, and number of affected packages (non-empty bom-ref
+// buckets) from a Grype result. All counts are zero when v is nil.
+func collectVulnStats(v *vulnscan.Result) (matches, unique, affected int) {
+	if v == nil {
+		return
+	}
+	uniqueIDs := map[string]struct{}{}
+	for _, vmatches := range v.MatchesByBOMRef {
+		if len(vmatches) > 0 {
+			affected++
+		}
+		for i := range vmatches {
+			m := vmatches[i]
+			matches++
+			uniqueIDs[m.VulnerabilityID] = struct{}{}
+		}
+	}
+	unique = len(uniqueIDs)
+	return
+}
+
 // writeVulnerabilitySummary renders the vulnerability enrichment section to w,
 // including state, grype version, and a per-severity summary table.
 func writeVulnerabilitySummary(w io.Writer, data ReportData, occurrences []componentOccurrence, t translations) {
-	if data.Vulnerabilities == nil {
+	if data.Vulnerabilities == nil || !vulnerabilityRequested(data.Vulnerabilities) {
 		fmt.Fprintf(w, "- %s\n", t.vulnEnrichmentNotRequested)
 		return
 	}

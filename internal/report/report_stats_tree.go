@@ -196,6 +196,7 @@ func collectExtractionStats(node *extract.ExtractionNode) extractionStats {
 		switch n.Status {
 		case extract.StatusExtracted:
 			stats.Extracted++
+			stats.TotalFileEntries += n.EntriesCount
 		case extract.StatusSyftNative:
 			stats.SyftNative++
 		case extract.StatusFailed:
