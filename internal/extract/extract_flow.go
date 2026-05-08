@@ -95,6 +95,8 @@ func extractRecursive(ctx context.Context, node *ExtractionNode, filePath string
 		return nil
 	}
 
+	cfg.EmitProgress(config.ProgressNormal, "[extract-sbom] extracting: %s (%s)", deliveryPath, info.Format)
+
 	start := time.Now()
 
 	extractCtx := ctx
@@ -166,6 +168,9 @@ func extractRecursive(ctx context.Context, node *ExtractionNode, filePath string
 		}
 		return nil
 	}
+
+	cfg.EmitProgress(config.ProgressVerbose, "[extract-sbom] extracted: %s → %s in %s",
+		deliveryPath, node.Status, node.Duration.Round(time.Millisecond))
 
 	if node.ExtractedDir != "" {
 		if walkErr := recurseIntoDir(ctx, node, node.ExtractedDir, deliveryPath, depth+1, cfg, sb); walkErr != nil {
