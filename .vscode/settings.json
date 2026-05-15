@@ -1,9 +1,0 @@
-{
-    "chat.tools.terminal.autoApprove": {
-        "go": true,
-        "golangci-lint": true,
-        "uniq": true,
-        "gofmt": true,
-        "markdownlint-cli2": true
-    }
-}
