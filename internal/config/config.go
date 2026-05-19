@@ -411,8 +411,11 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("unsupported language: %q (valid: en, de)", c.Language)
 	}
 
-	if c.SBOMFormat != "cyclonedx-json" {
-		return fmt.Errorf("unsupported SBOM format: %q (valid: cyclonedx-json)", c.SBOMFormat)
+	switch c.SBOMFormat {
+	case "cyclonedx-json", "cyclonedx-xml", "spdx-json":
+		// valid
+	default:
+		return fmt.Errorf("unsupported SBOM format: %q (valid: cyclonedx-json, cyclonedx-xml, spdx-json)", c.SBOMFormat)
 	}
 
 	if err := c.RootMetadata.Validate(); err != nil {

@@ -642,7 +642,7 @@ func TestVendorSuiteDeterminism(t *testing.T) {
 			t.Fatalf("assembly failed: %v", err)
 		}
 		out := filepath.Join(cfg.OutputDir, "test.cdx.json")
-		if writeErr := assembly.WriteSBOM(bom, out); writeErr != nil {
+		if writeErr := assembly.WriteSBOM(bom, out, "cyclonedx-json"); writeErr != nil {
 			t.Fatalf("write SBOM: %v", writeErr)
 		}
 		data, err := os.ReadFile(out)

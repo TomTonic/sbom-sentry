@@ -292,6 +292,31 @@ func extractUnshield(ctx context.Context, node *ExtractionNode, filePath string,
 	return nil
 }
 
+// extractSquashfs extracts a SquashFS image using unsquashfs when available,
+// falling back to 7-Zip if unsquashfs is not installed.
+func extractSquashfs(ctx context.Context, node *ExtractionNode, filePath string, sb sandbox.Sandbox, workDir string, limits config.Limits) error {
+	if !isToolAvailable("unsquashfs") {
+		// Fall back to 7z extraction.
+		return extract7zWithPasswords(ctx, node, filePath, sb, workDir, limits, nil)
+	}
+
+	outDir, err := os.MkdirTemp(workDir, "extract-sbom-squashfs-*")
+	if err != nil {
+		return fmt.Errorf("extract: create temp dir: %w", err)
+	}
+
+	node.Tool = "unsquashfs"
+	node.SandboxUsed = sb.Name()
+	args := []string{"-d", outDir, "-f", filePath}
+	if err := sb.Run(ctx, "unsquashfs", args, filePath, outDir); err != nil {
+		os.RemoveAll(outDir)
+		node.Status = StatusFailed
+		node.StatusDetail = fmt.Sprintf("unsquashfs extraction failed: %v", err)
+		return nil
+	}
+	return finalizeExternalExtraction(node, outDir, limits)
+}
+
 // finalizeExternalExtraction validates and summarizes an output directory created
 // by an external extractor before attaching it to the extraction tree.
 func finalizeExternalExtraction(node *ExtractionNode, outDir string, limits config.Limits) error {

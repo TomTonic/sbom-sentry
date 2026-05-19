@@ -150,6 +150,9 @@ func TestParseReportModeAcceptsValidValues(t *testing.T) {
 		{"human", "human", ReportHuman, false},
 		{"machine", "machine", ReportMachine, false},
 		{"both", "both", ReportBoth, false},
+		{"html", "html", ReportHTML, false},
+		{"sarif", "sarif", ReportSARIF, false},
+		{"all", "all", ReportAll, false},
 		{"invalid rejected", "xml", ReportHuman, true},
 	}
 
@@ -260,6 +263,8 @@ func TestConfigValidateRejectsInvalidConfig(t *testing.T) {
 		{"nonexistent work dir", func(c *Config) { c.WorkDir = "/nonexistent/work-dir" }, true},
 		{"work dir is file", func(c *Config) { c.WorkDir = inputFile }, true},
 		{"unsupported SBOM format", func(c *Config) { c.SBOMFormat = "spdx" }, true},
+		{"cyclonedx-xml accepted", func(c *Config) { c.SBOMFormat = "cyclonedx-xml" }, false},
+		{"spdx-json accepted", func(c *Config) { c.SBOMFormat = "spdx-json" }, false},
 		{"max-depth zero", func(c *Config) { c.Limits.MaxDepth = 0 }, true},
 		{"max-files zero", func(c *Config) { c.Limits.MaxFiles = 0 }, true},
 		{"max-ratio zero", func(c *Config) { c.Limits.MaxRatio = 0 }, true},

@@ -145,10 +145,10 @@ Configuration can be set via:
 	// CLI flags (also bound to viper for env var / config file support).
 	cmd.Flags().StringVarP(&outputDir, "output-dir", "o", ".", "Target directory for SBOM and report output")
 	cmd.Flags().StringVar(&workDir, "work-dir", defaults.WorkDir, "Base directory for temporary extraction work")
-	cmd.Flags().StringVar(&sbomFormat, "format", "cyclonedx-json", "SBOM output format")
+	cmd.Flags().StringVar(&sbomFormat, "format", "cyclonedx-json", "SBOM output format: cyclonedx-json, cyclonedx-xml, or spdx-json")
 	cmd.Flags().StringVar(&policyStr, "policy", "partial", "Policy mode: partial (skip issue and continue) or strict (abort)")
 	cmd.Flags().StringVar(&modeStr, "mode", "installer-semantic", "Interpretation mode: physical or installer-semantic")
-	cmd.Flags().StringVar(&reportStr, "report", "human", "Report output mode: human, machine, or both")
+	cmd.Flags().StringVar(&reportStr, "report", "human", "Report output mode: human, machine, both, html, sarif, or all")
 	cmd.Flags().StringVar(&progress, "progress", "normal", "Progress output verbosity: quiet, normal, or verbose")
 	cmd.Flags().StringVar(&language, "language", "en", "Report language: en or de")
 	cmd.Flags().StringVar(&mfg, "root-manufacturer", "", "Manufacturer/supplier for the SBOM root component")

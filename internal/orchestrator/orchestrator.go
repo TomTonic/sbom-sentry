@@ -130,6 +130,10 @@ func Run(ctx context.Context, cfg config.Config) Result {
 				"[extract-sbom] WARNING: unshield not found on PATH. InstallShield CAB extraction will fail.")
 			addIssue("tool-availability", fmt.Errorf("unshield not found on PATH"))
 		}
+		if !extract.IsToolAvailable("unsquashfs") {
+			cfg.EmitProgress(config.ProgressNormal,
+				"[extract-sbom] INFO: unsquashfs not found on PATH. SquashFS extraction will fall back to 7zz.")
+		}
 	}
 
 	// Step 4: Extract.
@@ -216,9 +220,16 @@ func Run(ctx context.Context, cfg config.Config) Result {
 		} else {
 			// Write SBOM.
 			inputBase := strings.TrimSuffix(filepath.Base(cfg.InputPath), filepath.Ext(cfg.InputPath))
-			sbomCandidate := filepath.Join(cfg.OutputDir, inputBase+".cdx.json")
+			sbomExt := sbomExtension(cfg.SBOMFormat)
+			sbomCandidate := filepath.Join(cfg.OutputDir, inputBase+sbomExt)
 			sbomPath = sbomCandidate
-			if writeErr := assembly.WriteSBOM(bom, sbomPath); writeErr != nil {
+			var writeErr error
+			if cfg.SBOMFormat == "spdx-json" {
+				writeErr = assembly.WriteSBOMSPDX(bom, sbomPath)
+			} else {
+				writeErr = assembly.WriteSBOM(bom, sbomPath, cfg.SBOMFormat)
+			}
+			if writeErr != nil {
 				addIssue("write-sbom", writeErr)
 				policyEngine.Evaluate(policy.Violation{
 					Type:     "write-sbom",
@@ -285,7 +296,7 @@ func Run(ctx context.Context, cfg config.Config) Result {
 	humanIssueCount := -1
 
 	switch cfg.ReportMode {
-	case config.ReportHuman, config.ReportBoth:
+	case config.ReportHuman, config.ReportBoth, config.ReportAll:
 		humanPath = filepath.Join(cfg.OutputDir, inputBase+".report.md")
 		f, ferr := os.Create(humanPath)
 		if ferr != nil {
@@ -318,7 +329,7 @@ func Run(ctx context.Context, cfg config.Config) Result {
 	}
 
 	switch cfg.ReportMode {
-	case config.ReportMachine, config.ReportBoth:
+	case config.ReportMachine, config.ReportBoth, config.ReportAll:
 		jsonPath := filepath.Join(cfg.OutputDir, inputBase+".report.json")
 		f, ferr := os.Create(jsonPath)
 		if ferr != nil {
@@ -345,6 +356,70 @@ func Run(ctx context.Context, cfg config.Config) Result {
 				}
 			} else if reportPath == "" {
 				reportPath = jsonPath
+			}
+		}
+	}
+
+	switch cfg.ReportMode {
+	case config.ReportHTML, config.ReportAll:
+		htmlPath := filepath.Join(cfg.OutputDir, inputBase+".report.html")
+		f, ferr := os.Create(htmlPath)
+		if ferr != nil {
+			addIssue("create-report-html", ferr)
+			if fatalErr == nil {
+				fatalErr = fmt.Errorf("create HTML report: %w", ferr)
+			}
+		} else {
+			if werr := report.GenerateHTML(buildReportData(), cfg.Language, f); werr != nil {
+				if cerr := f.Close(); cerr != nil {
+					addIssue("close-report-html", cerr)
+					if fatalErr == nil {
+						fatalErr = fmt.Errorf("close HTML report: %w", cerr)
+					}
+				}
+				addIssue("write-report-html", werr)
+				if fatalErr == nil {
+					fatalErr = fmt.Errorf("write HTML report: %w", werr)
+				}
+			} else if cerr := f.Close(); cerr != nil {
+				addIssue("close-report-html", cerr)
+				if fatalErr == nil {
+					fatalErr = fmt.Errorf("close HTML report: %w", cerr)
+				}
+			} else if reportPath == "" {
+				reportPath = htmlPath
+			}
+		}
+	}
+
+	switch cfg.ReportMode {
+	case config.ReportSARIF:
+		sarifPath := filepath.Join(cfg.OutputDir, inputBase+".sarif.json")
+		f, ferr := os.Create(sarifPath)
+		if ferr != nil {
+			addIssue("create-report-sarif", ferr)
+			if fatalErr == nil {
+				fatalErr = fmt.Errorf("create SARIF report: %w", ferr)
+			}
+		} else {
+			if werr := report.GenerateSARIF(buildReportData(), f); werr != nil {
+				if cerr := f.Close(); cerr != nil {
+					addIssue("close-report-sarif", cerr)
+					if fatalErr == nil {
+						fatalErr = fmt.Errorf("close SARIF report: %w", cerr)
+					}
+				}
+				addIssue("write-report-sarif", werr)
+				if fatalErr == nil {
+					fatalErr = fmt.Errorf("write SARIF report: %w", werr)
+				}
+			} else if cerr := f.Close(); cerr != nil {
+				addIssue("close-report-sarif", cerr)
+				if fatalErr == nil {
+					fatalErr = fmt.Errorf("close SARIF report: %w", cerr)
+				}
+			} else if reportPath == "" {
+				reportPath = sarifPath
 			}
 		}
 	}
@@ -400,6 +475,18 @@ func Run(ctx context.Context, cfg config.Config) Result {
 		ReportPath: reportPath,
 		Issues:     append([]report.ProcessingIssue(nil), issues...),
 		Error:      fatalErr,
+	}
+}
+
+// sbomExtension returns the file extension for the given SBOM format string.
+func sbomExtension(format string) string {
+	switch format {
+	case "cyclonedx-xml":
+		return ".cdx.xml"
+	case "spdx-json":
+		return ".spdx.json"
+	default:
+		return ".cdx.json"
 	}
 }
 

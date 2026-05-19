@@ -22,7 +22,7 @@ func TestWriteSBOMWritesValidJSON(t *testing.T) {
 	bom := cdx.NewBOM()
 	bom.Metadata = &cdx.Metadata{}
 
-	if err := WriteSBOM(bom, outPath); err != nil {
+	if err := WriteSBOM(bom, outPath, "cyclonedx-json"); err != nil {
 		t.Fatalf("WriteSBOM error: %v", err)
 	}
 
