@@ -2,7 +2,7 @@ module github.com/TomTonic/extract-sbom
 
 go 1.26.3
 
-replace github.com/diskfs/go-diskfs => github.com/diskfs/go-diskfs v1.7.0
+replace github.com/diskfs/go-diskfs => github.com/diskfs/go-diskfs v1.9.3
 
 require (
 	github.com/CycloneDX/cyclonedx-go v0.11.0
