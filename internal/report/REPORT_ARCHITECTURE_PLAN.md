@@ -147,7 +147,7 @@ Status values:
 
 ### REP-ARCH-005 - Human renderer backend hard boundaries
 
-- Status: `PLANNED`
+- Status: `DONE`
 - Objective: Ensure renderer files contain rendering orchestration only, while
   data shaping lives in view-model/helpers.
 - Exit criteria:
@@ -220,4 +220,4 @@ For every future refactoring PR/commit in `internal/report`, include:
 
 ## Current Next Step
 
-`REP-ARCH-005 - Human renderer backend hard boundaries`
+`REP-ARCH-006 - HTML generator domain extraction`
