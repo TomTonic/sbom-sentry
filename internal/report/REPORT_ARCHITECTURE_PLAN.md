@@ -193,7 +193,7 @@ Status values:
 
 ### REP-ARCH-010 - Final hardening pass
 
-- Status: `PLANNED`
+- Status: `DONE`
 - Objective: Remove dead helpers, tighten comments/GoDoc, and ensure file-size
   cohesion targets are met.
 - Exit criteria:
@@ -220,4 +220,4 @@ For every future refactoring PR/commit in `internal/report`, include:
 
 ## Current Next Step
 
-`REP-ARCH-010 - Final hardening pass`
+`Completed: REP-ARCH-010 - Final hardening pass`

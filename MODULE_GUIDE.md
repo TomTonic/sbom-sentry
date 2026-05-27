@@ -783,7 +783,7 @@ func GenerateSARIF(data ReportData, w io.Writer) error
 - `report_human_sections_summary.go`, `report_human_sections_process.go`, `report_human_sections_appendix.go`: split section writers by domain concern.
 - `report_i18n_core.go`, `report_i18n_human_en.go`, `report_i18n_human_de.go`: compile-time localization catalogs and selector logic.
 - `report_occurrence_collect.go`, `report_occurrence_group.go`, `report_occurrence_render.go`: occurrence extraction, grouping, ordering, dedupe, and rendering.
-- `report_vuln.go`, `report_vuln_enrichment_helpers.go`: vulnerability summary/detail rendering and shared enrichment-state normalization.
+- `report_vuln.go`, `report_vuln_format.go`, `report_vuln_enrichment_helpers.go`: vulnerability summary/detail rendering, formatting/reference helpers, and shared enrichment-state normalization.
 - `report_suppression.go`: suppression appendix rendering and replacement-link resolution.
 - `report_stats_tree.go`: extraction-tree rendering, residual-risk section, and phase statistics collectors.
 - `report_machine.go`: structured machine JSON report generator.
