@@ -1,0 +1,297 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/TomTonic/extract-sbom/schemas/report.schema.v2.json",
+  "title": "extract-sbom JSON report v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "run",
+    "input",
+    "generator",
+    "config",
+    "runtime",
+    "raw",
+    "entities",
+    "projections",
+    "integrity",
+    "compatibility"
+  ],
+  "properties": {
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "generatedAt"],
+      "properties": {
+        "name": { "const": "extract-sbom-report" },
+        "version": { "const": "2.0.0" },
+        "generatedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runId", "startTime", "endTime", "duration", "exitCode"],
+      "properties": {
+        "runId": { "type": "string", "minLength": 1 },
+        "startTime": { "type": "string", "format": "date-time" },
+        "endTime": { "type": "string", "format": "date-time" },
+        "duration": { "type": "string", "minLength": 1 },
+        "exitCode": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["filename", "size", "sha256", "sha512"],
+      "properties": {
+        "filename": { "type": "string" },
+        "size": { "type": "integer", "minimum": 0 },
+        "sha256": { "type": "string", "minLength": 64, "maxLength": 64 },
+        "sha512": { "type": "string", "minLength": 128, "maxLength": 128 }
+      }
+    },
+    "generator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "modified", "display"],
+      "properties": {
+        "version": { "type": "string" },
+        "revision": { "type": "string" },
+        "time": { "type": "string" },
+        "modified": { "type": "boolean" },
+        "display": { "type": "string" }
+      }
+    },
+    "config": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sandbox", "toolVersions", "warnings"],
+      "properties": {
+        "sandbox": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "available", "unsafeOverride"],
+          "properties": {
+            "name": { "type": "string" },
+            "available": { "type": "boolean" },
+            "unsafeOverride": { "type": "boolean" }
+          }
+        },
+        "toolVersions": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "sevenZip": { "type": "string" },
+            "unshield": { "type": "string" },
+            "unsquashfs": { "type": "string" },
+            "grype": { "type": "string" },
+            "grypeDb": { "type": "string" }
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["code", "message"],
+            "properties": {
+              "code": { "type": "string" },
+              "message": { "type": "string" },
+              "relatedNodeId": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "raw": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "extractionTreeRaw",
+        "scansRaw",
+        "bomRaw",
+        "vulnerabilitiesRaw",
+        "policyDecisionsRaw",
+        "processingIssuesRaw",
+        "suppressionsRaw",
+        "artifactPaths"
+      ],
+      "properties": {
+        "extractionTreeRaw": {},
+        "scansRaw": { "type": "array", "items": {} },
+        "bomRaw": {},
+        "vulnerabilitiesRaw": {},
+        "policyDecisionsRaw": { "type": "array", "items": {} },
+        "processingIssuesRaw": { "type": "array", "items": {} },
+        "suppressionsRaw": { "type": "array", "items": {} },
+        "artifactPaths": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["sbomPath"],
+          "properties": {
+            "sbomPath": { "type": "string" },
+            "markdownReportPath": { "type": "string" },
+            "jsonReportPath": { "type": "string" },
+            "htmlReportPath": { "type": "string" },
+            "sarifReportPath": { "type": "string" }
+          }
+        }
+      }
+    },
+    "entities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "nodes",
+        "scanTasks",
+        "components",
+        "packageGroups",
+        "vulnerabilities",
+        "suppressions",
+        "policyDecisions",
+        "issues"
+      ],
+      "properties": {
+        "nodes": { "$ref": "#/$defs/entityArray" },
+        "scanTasks": { "$ref": "#/$defs/entityArray" },
+        "components": { "$ref": "#/$defs/entityArray" },
+        "packageGroups": { "$ref": "#/$defs/entityArray" },
+        "vulnerabilities": { "$ref": "#/$defs/entityArray" },
+        "suppressions": { "$ref": "#/$defs/entityArray" },
+        "policyDecisions": { "$ref": "#/$defs/entityArray" },
+        "issues": { "$ref": "#/$defs/entityArray" }
+      }
+    },
+    "projections": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["generic", "markdown", "html"],
+      "properties": {
+        "generic": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["summary", "extractionRows", "vulnerabilityRows", "issueRows", "componentIndex"],
+          "properties": {
+            "summary": { "type": "object" },
+            "extractionRows": { "$ref": "#/$defs/projectionArray" },
+            "vulnerabilityRows": { "$ref": "#/$defs/projectionArray" },
+            "issueRows": { "$ref": "#/$defs/projectionArray" },
+            "componentIndex": { "$ref": "#/$defs/projectionArray" }
+          }
+        },
+        "markdown": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["sections", "toc", "anchors"],
+          "properties": {
+            "sections": { "$ref": "#/$defs/projectionArray" },
+            "toc": { "$ref": "#/$defs/projectionArray" },
+            "anchors": { "$ref": "#/$defs/projectionArray" }
+          }
+        },
+        "html": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["summaryCards", "tableModels"],
+          "properties": {
+            "summaryCards": { "$ref": "#/$defs/projectionArray" },
+            "tableModels": { "$ref": "#/$defs/projectionArray" }
+          }
+        }
+      }
+    },
+    "integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["counts", "danglingReferenceCount", "validationState", "validationErrors"],
+      "properties": {
+        "counts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "nodes",
+            "scanTasks",
+            "components",
+            "packageGroups",
+            "vulnerabilities",
+            "suppressions",
+            "policyDecisions",
+            "issues"
+          ],
+          "properties": {
+            "nodes": { "type": "integer", "minimum": 0 },
+            "scanTasks": { "type": "integer", "minimum": 0 },
+            "components": { "type": "integer", "minimum": 0 },
+            "packageGroups": { "type": "integer", "minimum": 0 },
+            "vulnerabilities": { "type": "integer", "minimum": 0 },
+            "suppressions": { "type": "integer", "minimum": 0 },
+            "policyDecisions": { "type": "integer", "minimum": 0 },
+            "issues": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "danglingReferenceCount": { "type": "integer", "minimum": 0 },
+        "validationState": { "enum": ["ok", "warning", "error"] },
+        "validationErrors": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "compatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["legacyAliasesUsed", "migrationHints"],
+      "properties": {
+        "legacyAliasesUsed": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "reportSelectionAlias": { "enum": ["human", "machine"] },
+            "deprecatedFlagsUsed": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          }
+        },
+        "migrationHints": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "entityArray": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "projectionArray": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["sourceRefs"],
+        "properties": {
+          "sourceRefs": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "resolutionStatus": { "enum": ["resolved", "missing", "ambiguous"] },
+          "resolutionReason": { "type": "string" }
+        }
+      }
+    }
+  }
+}
