@@ -149,8 +149,70 @@ type artifactPathsV2 struct {
 	SARIFReportPath    string `json:"sarifReportPath,omitempty"`
 }
 
-type entityV2 struct {
-	ID string `json:"id"`
+type nodeEntityV2 struct {
+	ID       string   `json:"id"`
+	Path     string   `json:"path"`
+	Status   string   `json:"status"`
+	ParentID string   `json:"parentId,omitempty"`
+	ChildIDs []string `json:"childIds,omitempty"`
+}
+
+type scanTaskEntityV2 struct {
+	ID           string   `json:"id"`
+	NodeID       string   `json:"nodeId,omitempty"`
+	NodePath     string   `json:"nodePath"`
+	ComponentIDs []string `json:"componentIds,omitempty"`
+	Error        string   `json:"error,omitempty"`
+}
+
+type componentEntityV2 struct {
+	ID      string `json:"id"`
+	BOMRef  string `json:"bomRef,omitempty"`
+	Name    string `json:"name,omitempty"`
+	Version string `json:"version,omitempty"`
+	PURL    string `json:"purl,omitempty"`
+	Type    string `json:"type,omitempty"`
+}
+
+type packageGroupEntityV2 struct {
+	ID           string   `json:"id"`
+	PURL         string   `json:"purl"`
+	ComponentIDs []string `json:"componentIds"`
+}
+
+type vulnerabilityEntityV2 struct {
+	ID              string `json:"id"`
+	VulnerabilityID string `json:"vulnerabilityId"`
+	ComponentID     string `json:"componentId,omitempty"`
+	Severity        string `json:"severity,omitempty"`
+	BOMRef          string `json:"bomRef,omitempty"`
+}
+
+type suppressionEntityV2 struct {
+	ID                     string `json:"id"`
+	Reason                 string `json:"reason"`
+	SuppressedComponentRef string `json:"suppressedComponentRef,omitempty"`
+	SuppressedComponentID  string `json:"suppressedComponentId,omitempty"`
+	KeptComponentName      string `json:"keptComponentName,omitempty"`
+	KeptComponentFoundBy   string `json:"keptComponentFoundBy,omitempty"`
+	KeptComponentID        string `json:"keptComponentId,omitempty"`
+	ResolutionStatus       string `json:"resolutionStatus,omitempty"`
+	ResolutionReason       string `json:"resolutionReason,omitempty"`
+}
+
+type policyDecisionEntityV2 struct {
+	ID       string `json:"id"`
+	Trigger  string `json:"trigger"`
+	NodePath string `json:"nodePath,omitempty"`
+	NodeID   string `json:"nodeId,omitempty"`
+	Action   string `json:"action"`
+	Detail   string `json:"detail,omitempty"`
+}
+
+type issueEntityV2 struct {
+	ID      string `json:"id"`
+	Stage   string `json:"stage"`
+	Message string `json:"message"`
 }
 
 type projectionRowV2 struct {
@@ -160,14 +222,14 @@ type projectionRowV2 struct {
 }
 
 type entitiesV2 struct {
-	Nodes           []entityV2 `json:"nodes"`
-	ScanTasks       []entityV2 `json:"scanTasks"`
-	Components      []entityV2 `json:"components"`
-	PackageGroups   []entityV2 `json:"packageGroups"`
-	Vulnerabilities []entityV2 `json:"vulnerabilities"`
-	Suppressions    []entityV2 `json:"suppressions"`
-	PolicyDecisions []entityV2 `json:"policyDecisions"`
-	Issues          []entityV2 `json:"issues"`
+	Nodes           []nodeEntityV2           `json:"nodes"`
+	ScanTasks       []scanTaskEntityV2       `json:"scanTasks"`
+	Components      []componentEntityV2      `json:"components"`
+	PackageGroups   []packageGroupEntityV2   `json:"packageGroups"`
+	Vulnerabilities []vulnerabilityEntityV2  `json:"vulnerabilities"`
+	Suppressions    []suppressionEntityV2    `json:"suppressions"`
+	PolicyDecisions []policyDecisionEntityV2 `json:"policyDecisions"`
+	Issues          []issueEntityV2          `json:"issues"`
 }
 
 type projectionsV2 struct {
