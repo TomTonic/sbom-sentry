@@ -24,21 +24,21 @@ type ReportData = model.ReportData
 
 // Generate writes a structured JSON audit report to the writer.
 func Generate(data ReportData, w io.Writer) error {
-	report := machineReport{
+	report := jsonReport{
 		SchemaVersion: "1.0.0",
 		Input:         data.Input,
-		Generator: machineGenerator{
+		Generator: jsonGenerator{
 			Version:  data.Generator.Version,
 			Revision: data.Generator.Revision,
 			Time:     data.Generator.Time,
 			Modified: data.Generator.Modified,
 			Display:  data.Generator.String(),
 		},
-		Config: machineConfig{
+		Config: jsonConfig{
 			PolicyMode:    data.Config.PolicyMode.String(),
 			InterpretMode: data.Config.InterpretMode.String(),
 			Language:      data.Config.Language,
-			Limits: machineLimits{
+			Limits: jsonLimits{
 				MaxDepth:     data.Config.Limits.MaxDepth,
 				MaxFiles:     data.Config.Limits.MaxFiles,
 				MaxTotalSize: data.Config.Limits.MaxTotalSize,
@@ -47,14 +47,14 @@ func Generate(data ReportData, w io.Writer) error {
 				Timeout:      data.Config.Limits.Timeout.String(),
 			},
 		},
-		RootMetadata: machineRootMetadata{
+		RootMetadata: jsonRootMetadata{
 			Manufacturer: data.Config.RootMetadata.Manufacturer,
 			Name:         data.Config.RootMetadata.Name,
 			Version:      data.Config.RootMetadata.Version,
 			DeliveryDate: data.Config.RootMetadata.DeliveryDate,
 			Properties:   data.Config.RootMetadata.Properties,
 		},
-		Sandbox: machineSandbox{
+		Sandbox: jsonSandbox{
 			Name:      data.SandboxInfo.Name,
 			Available: data.SandboxInfo.Available,
 			Unsafe:    data.SandboxInfo.UnsafeOvr,
@@ -74,31 +74,31 @@ func Generate(data ReportData, w io.Writer) error {
 	return encoder.Encode(report)
 }
 
-type machineReport struct {
-	SchemaVersion   string                  `json:"schemaVersion"`
-	Input           InputSummary            `json:"input"`
-	Generator       machineGenerator        `json:"generator"`
-	Config          machineConfig           `json:"config"`
-	RootMetadata    machineRootMetadata     `json:"rootMetadata"`
-	Sandbox         machineSandbox          `json:"sandbox"`
-	Extraction      *machineNode            `json:"extraction"`
-	Scans           []machineScan           `json:"scans"`
-	Vulnerabilities *machineVulnerabilities `json:"vulnerabilities,omitempty"`
-	Decisions       []machineDecision       `json:"decisions"`
-	Issues          []ProcessingIssue       `json:"issues,omitempty"`
-	StartTime       string                  `json:"startTime"`
-	EndTime         string                  `json:"endTime"`
-	Duration        string                  `json:"duration"`
+type jsonReport struct {
+	SchemaVersion   string               `json:"schemaVersion"`
+	Input           InputSummary         `json:"input"`
+	Generator       jsonGenerator        `json:"generator"`
+	Config          jsonConfig           `json:"config"`
+	RootMetadata    jsonRootMetadata     `json:"rootMetadata"`
+	Sandbox         jsonSandbox          `json:"sandbox"`
+	Extraction      *jsonNode            `json:"extraction"`
+	Scans           []jsonScan           `json:"scans"`
+	Vulnerabilities *jsonVulnerabilities `json:"vulnerabilities,omitempty"`
+	Decisions       []jsonDecision       `json:"decisions"`
+	Issues          []ProcessingIssue    `json:"issues,omitempty"`
+	StartTime       string               `json:"startTime"`
+	EndTime         string               `json:"endTime"`
+	Duration        string               `json:"duration"`
 }
 
-type machineConfig struct {
-	PolicyMode    string        `json:"policyMode"`
-	InterpretMode string        `json:"interpretMode"`
-	Language      string        `json:"language"`
-	Limits        machineLimits `json:"limits"`
+type jsonConfig struct {
+	PolicyMode    string     `json:"policyMode"`
+	InterpretMode string     `json:"interpretMode"`
+	Language      string     `json:"language"`
+	Limits        jsonLimits `json:"limits"`
 }
 
-type machineGenerator struct {
+type jsonGenerator struct {
 	Version  string `json:"version"`
 	Revision string `json:"revision,omitempty"`
 	Time     string `json:"time,omitempty"`
@@ -106,7 +106,7 @@ type machineGenerator struct {
 	Display  string `json:"display"`
 }
 
-type machineLimits struct {
+type jsonLimits struct {
 	MaxDepth     int    `json:"maxDepth"`
 	MaxFiles     int    `json:"maxFiles"`
 	MaxTotalSize int64  `json:"maxTotalSize"`
@@ -115,7 +115,7 @@ type machineLimits struct {
 	Timeout      string `json:"timeout"`
 }
 
-type machineRootMetadata struct {
+type jsonRootMetadata struct {
 	Manufacturer string            `json:"manufacturer,omitempty"`
 	Name         string            `json:"name,omitempty"`
 	Version      string            `json:"version,omitempty"`
@@ -123,40 +123,40 @@ type machineRootMetadata struct {
 	Properties   map[string]string `json:"properties,omitempty"`
 }
 
-type machineSandbox struct {
+type jsonSandbox struct {
 	Name      string `json:"name"`
 	Available bool   `json:"available"`
 	Unsafe    bool   `json:"unsafe"`
 }
 
-type machineNode struct {
-	Path         string         `json:"path"`
-	Format       string         `json:"format"`
-	Status       string         `json:"status"`
-	StatusDetail string         `json:"statusDetail,omitempty"`
-	Tool         string         `json:"tool,omitempty"`
-	SandboxUsed  string         `json:"sandboxUsed,omitempty"`
-	Duration     string         `json:"duration,omitempty"`
-	EntriesCount int            `json:"entriesCount,omitempty"`
-	TotalSize    int64          `json:"totalSize,omitempty"`
-	Children     []*machineNode `json:"children,omitempty"`
+type jsonNode struct {
+	Path         string      `json:"path"`
+	Format       string      `json:"format"`
+	Status       string      `json:"status"`
+	StatusDetail string      `json:"statusDetail,omitempty"`
+	Tool         string      `json:"tool,omitempty"`
+	SandboxUsed  string      `json:"sandboxUsed,omitempty"`
+	Duration     string      `json:"duration,omitempty"`
+	EntriesCount int         `json:"entriesCount,omitempty"`
+	TotalSize    int64       `json:"totalSize,omitempty"`
+	Children     []*jsonNode `json:"children,omitempty"`
 }
 
-type machineScan struct {
+type jsonScan struct {
 	NodePath       string   `json:"nodePath"`
 	ComponentCount int      `json:"componentCount"`
 	EvidencePaths  []string `json:"evidencePaths,omitempty"`
 	Error          string   `json:"error,omitempty"`
 }
 
-type machineDecision struct {
+type jsonDecision struct {
 	Trigger  string `json:"trigger"`
 	NodePath string `json:"nodePath"`
 	Action   string `json:"action"`
 	Detail   string `json:"detail"`
 }
 
-type machineVulnerabilities struct {
+type jsonVulnerabilities struct {
 	State            string                            `json:"state"`
 	Requested        bool                              `json:"requested"`
 	GrypeVersion     string                            `json:"grypeVersion,omitempty"`
@@ -168,12 +168,12 @@ type machineVulnerabilities struct {
 	Errors           []vulnscan.Issue                  `json:"errors,omitempty"`
 }
 
-func buildTree(node *extract.ExtractionNode) *machineNode {
+func buildTree(node *extract.ExtractionNode) *jsonNode {
 	if node == nil {
 		return nil
 	}
 
-	mn := &machineNode{
+	jn := &jsonNode{
 		Path:         node.Path,
 		Format:       node.Format.Format.String(),
 		Status:       node.Status.String(),
@@ -186,32 +186,32 @@ func buildTree(node *extract.ExtractionNode) *machineNode {
 	}
 
 	for _, child := range node.Children {
-		mn.Children = append(mn.Children, buildTree(child))
+		jn.Children = append(jn.Children, buildTree(child))
 	}
 
-	return mn
+	return jn
 }
 
-func buildScans(scans []scan.ScanResult) []machineScan {
-	result := make([]machineScan, len(scans))
+func buildScans(scans []scan.ScanResult) []jsonScan {
+	result := make([]jsonScan, len(scans))
 	for i, s := range scans {
-		ms := machineScan{NodePath: s.NodePath}
+		js := jsonScan{NodePath: s.NodePath}
 		if s.Error != nil {
-			ms.Error = s.Error.Error()
+			js.Error = s.Error.Error()
 		}
 		if s.BOM != nil && s.BOM.Components != nil {
-			ms.ComponentCount = len(*s.BOM.Components)
+			js.ComponentCount = len(*s.BOM.Components)
 		}
-		ms.EvidencePaths = scan.FlattenEvidencePaths(s)
-		result[i] = ms
+		js.EvidencePaths = scan.FlattenEvidencePaths(s)
+		result[i] = js
 	}
 	return result
 }
 
-func buildDecisions(decisions []policy.Decision) []machineDecision {
-	result := make([]machineDecision, len(decisions))
+func buildDecisions(decisions []policy.Decision) []jsonDecision {
+	result := make([]jsonDecision, len(decisions))
 	for i, d := range decisions {
-		result[i] = machineDecision{
+		result[i] = jsonDecision{
 			Trigger:  d.Trigger,
 			NodePath: d.NodePath,
 			Action:   d.Action.String(),
@@ -221,12 +221,12 @@ func buildDecisions(decisions []policy.Decision) []machineDecision {
 	return result
 }
 
-func buildVulnerabilities(v *vulnscan.Result) *machineVulnerabilities {
+func buildVulnerabilities(v *vulnscan.Result) *jsonVulnerabilities {
 	if v == nil {
 		return nil
 	}
 	state, requested := normalizedVulnEnrichmentState(v)
-	return &machineVulnerabilities{
+	return &jsonVulnerabilities{
 		State:            string(state),
 		Requested:        requested,
 		GrypeVersion:     v.GrypeVersion,

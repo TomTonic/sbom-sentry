@@ -16,13 +16,13 @@ func TestOrderingContractSlicesPreserveProcessingOrder(t *testing.T) {
 		{Trigger: "max-depth", NodePath: "a/path", Action: policy.ActionContinue, Detail: "continue a"},
 	}
 
-	machineScans := buildScans(scans)
-	if len(machineScans) != 2 || machineScans[0].NodePath != "z/path" || machineScans[1].NodePath != "a/path" {
-		t.Fatalf("machine scan order changed: %+v", machineScans)
+	jsonScans := buildScans(scans)
+	if len(jsonScans) != 2 || jsonScans[0].NodePath != "z/path" || jsonScans[1].NodePath != "a/path" {
+		t.Fatalf("JSON scan order changed: %+v", jsonScans)
 	}
 
-	machineDecisions := buildDecisions(decisions)
-	if len(machineDecisions) != 2 || machineDecisions[0].NodePath != "z/path" || machineDecisions[1].NodePath != "a/path" {
-		t.Fatalf("machine decision order changed: %+v", machineDecisions)
+	jsonDecisions := buildDecisions(decisions)
+	if len(jsonDecisions) != 2 || jsonDecisions[0].NodePath != "z/path" || jsonDecisions[1].NodePath != "a/path" {
+		t.Fatalf("JSON decision order changed: %+v", jsonDecisions)
 	}
 }

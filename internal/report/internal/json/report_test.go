@@ -147,14 +147,14 @@ func TestBuildTreeNilReturnsNil(t *testing.T) {
 func TestBuildDecisions(t *testing.T) {
 	t.Parallel()
 
-	decisions := []machineDecision{{NodePath: "root.zip", Action: "continue"}}
+	decisions := []jsonDecision{{NodePath: "root.zip", Action: "continue"}}
 	if len(decisions) != 1 {
 		t.Fatal("expected one decision entry")
 	}
 	if decisions[0].NodePath != "root.zip" || decisions[0].Action != "continue" {
-		t.Fatalf("unexpected machine decision: %+v", decisions[0])
+		t.Fatalf("unexpected JSON decision: %+v", decisions[0])
 	}
 	if got := buildTree(&extract.ExtractionNode{Path: "root.zip"}); got == nil || got.Path != "root.zip" {
-		t.Fatalf("unexpected machine tree root: %+v", got)
+		t.Fatalf("unexpected JSON tree root: %+v", got)
 	}
 }
