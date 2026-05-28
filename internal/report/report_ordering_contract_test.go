@@ -13,7 +13,7 @@ func TestCrossReportOrderingContractHumanSectionBlocks(t *testing.T) {
 
 	data := makeTestReportData()
 	var buf bytes.Buffer
-	if err := GenerateHumanWithOptions(data, "en", &buf, HumanRenderOptions{}); err != nil {
+	if err := GenerateHuman(data, "en", &buf); err != nil {
 		t.Fatalf("GenerateHuman error: %v", err)
 	}
 	out := buf.String()

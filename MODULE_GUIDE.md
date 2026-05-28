@@ -748,9 +748,12 @@ type ReportData struct {
     EndTime          time.Time
 }
 
-// GenerateHumanWithOptions writes the human report using the selected
-// renderer backend (writer, template-wrapper, or template-document).
-func GenerateHumanWithOptions(data ReportData, lang string, w io.Writer, opts HumanRenderOptions) error
+// GenerateHuman writes the human report using the default writer backend.
+func GenerateHuman(data ReportData, lang string, w io.Writer) error
+
+// GenerateHumanWithEngine writes the human report using writer,
+// template-wrapper, or template-document backends.
+func GenerateHumanWithEngine(data ReportData, lang string, w io.Writer, engine string, templateContent string) error
 
 // GenerateHTML writes a self-contained HTML report.
 func GenerateHTML(data ReportData, lang string, w io.Writer) error
@@ -836,10 +839,10 @@ func GenerateSARIF(data ReportData, w io.Writer) error
   `completed`, `completed-with-errors`, `unavailable`, or `not-requested`.
 - Human report rendering is backend-oriented: a deterministic writer backend is
   the default for audit stability; optional template-wrapper/template-document
-  backends are selected through `GenerateHumanWithOptions`.
+  backends are selected through `GenerateHumanWithEngine`.
 - Runtime selection of the human renderer backend is configurable via
   `Config.HumanRenderEngine` and `Config.HumanTemplateFile`.
-  The orchestrator resolves these into `HumanRenderOptions` and keeps
+  The orchestrator resolves these into engine/template parameters and keeps
   machine/HTML/SARIF report generation unaffected.
 - Template execution helpers are package-local in
   `internal/report/internal/human`; the root `report` package keeps a minimal

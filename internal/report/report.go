@@ -55,30 +55,29 @@ func ComputeInputSummary(path string) (InputSummary, error) {
 	}, nil
 }
 
-// HumanRenderOptions configures optional human report rendering backends.
-//
-// Zero value means deterministic default writer rendering.
-type HumanRenderOptions struct {
-	// Engine selects the backend: writer, template-wrapper, template-document.
-	// Empty defaults to writer.
-	Engine string
-	// WrapperTemplate is used when Engine is template-wrapper.
-	WrapperTemplate string
-	// DocumentTemplate is used when Engine is template-document.
-	DocumentTemplate string
+// GenerateHuman writes the human report using the default deterministic
+// writer backend.
+func GenerateHuman(data ReportData, lang string, w io.Writer) error {
+	return GenerateHumanWithEngine(data, lang, w, "", "")
 }
 
-// GenerateHumanWithOptions writes the human report using the selected rendering
-// backend. Unknown engine values return an error.
-func GenerateHumanWithOptions(data ReportData, lang string, w io.Writer, opts HumanRenderOptions) error {
-	engine := humanpkg.RenderEngine(opts.Engine)
+// GenerateHumanWithEngine writes the human report using a selected renderer
+// backend. The engine can be "writer", "template-wrapper", or
+// "template-document". For template engines, templateContent is applied as the
+// wrapper or document template respectively.
+func GenerateHumanWithEngine(data ReportData, lang string, w io.Writer, engineName, templateContent string) error {
+	engine := humanpkg.RenderEngine(engineName)
 	if engine == "" {
 		engine = humanpkg.RenderEngineWriter
 	}
 	humanOpts := humanpkg.RenderOptions{
-		Engine:           engine,
-		WrapperTemplate:  opts.WrapperTemplate,
-		DocumentTemplate: opts.DocumentTemplate,
+		Engine: engine,
+	}
+	if engine == humanpkg.RenderEngineTemplateWrapper {
+		humanOpts.WrapperTemplate = templateContent
+	}
+	if engine == humanpkg.RenderEngineTemplateDocument {
+		humanOpts.DocumentTemplate = templateContent
 	}
 	return humanpkg.GenerateHumanWithOptions(data, lang, w, humanOpts)
 }

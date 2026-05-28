@@ -291,11 +291,11 @@ func Run(ctx context.Context, cfg config.Config) Result {
 		}
 	}
 
-	var humanRenderOptions report.HumanRenderOptions
+	var humanRenderConfig humanRenderConfig
 	var humanOptionsErr error
 	switch cfg.ReportMode {
 	case config.ReportHuman, config.ReportBoth, config.ReportAll:
-		humanRenderOptions, humanOptionsErr = humanRenderOptionsFromConfig(cfg)
+		humanRenderConfig, humanOptionsErr = humanRenderOptionsFromConfig(cfg)
 	}
 
 	inputBase := strings.TrimSuffix(filepath.Base(cfg.InputPath), filepath.Ext(cfg.InputPath))
@@ -324,7 +324,7 @@ func Run(ctx context.Context, cfg config.Config) Result {
 				if fatalErr == nil {
 					fatalErr = fmt.Errorf("write report: %w", humanOptionsErr)
 				}
-			} else if werr := report.GenerateHumanWithOptions(buildReportData(), cfg.Language, f, humanRenderOptions); werr != nil {
+			} else if werr := report.GenerateHumanWithEngine(buildReportData(), cfg.Language, f, humanRenderConfig.Engine, humanRenderConfig.Template); werr != nil {
 				if cerr := f.Close(); cerr != nil {
 					addIssue("close-report-human", cerr)
 					if fatalErr == nil {
@@ -461,7 +461,7 @@ func Run(ctx context.Context, cfg config.Config) Result {
 				if fatalErr == nil {
 					fatalErr = fmt.Errorf("rewrite report: %w", humanOptionsErr)
 				}
-			} else if writeErr := report.GenerateHumanWithOptions(buildReportData(), cfg.Language, f, humanRenderOptions); writeErr != nil {
+			} else if writeErr := report.GenerateHumanWithEngine(buildReportData(), cfg.Language, f, humanRenderConfig.Engine, humanRenderConfig.Template); writeErr != nil {
 				if closeErr := f.Close(); closeErr != nil {
 					addIssue("rewrite-report-human", closeErr)
 					if fatalErr == nil {
@@ -521,20 +521,25 @@ func sbomExtension(format string) string {
 
 // humanRenderOptionsFromConfig resolves human report renderer options from
 // runtime configuration, including optional template file loading.
-func humanRenderOptionsFromConfig(cfg config.Config) (report.HumanRenderOptions, error) {
+type humanRenderConfig struct {
+	Engine   string
+	Template string
+}
+
+func humanRenderOptionsFromConfig(cfg config.Config) (humanRenderConfig, error) {
 	engine := strings.TrimSpace(cfg.HumanRenderEngine)
 	if engine == "" || engine == "writer" {
-		return report.HumanRenderOptions{}, nil
+		return humanRenderConfig{}, nil
 	}
 
-	var opts report.HumanRenderOptions
+	opts := humanRenderConfig{}
 	switch engine {
 	case "template-wrapper":
 		opts.Engine = "template-wrapper"
 	case "template-document":
 		opts.Engine = "template-document"
 	default:
-		return report.HumanRenderOptions{}, fmt.Errorf("unsupported human render engine: %q", engine)
+		return humanRenderConfig{}, fmt.Errorf("unsupported human render engine: %q", engine)
 	}
 
 	templateFile := strings.TrimSpace(cfg.HumanTemplateFile)
@@ -544,15 +549,9 @@ func humanRenderOptionsFromConfig(cfg config.Config) (report.HumanRenderOptions,
 
 	raw, err := os.ReadFile(templateFile)
 	if err != nil {
-		return report.HumanRenderOptions{}, fmt.Errorf("read human template file %q: %w", templateFile, err)
+		return humanRenderConfig{}, fmt.Errorf("read human template file %q: %w", templateFile, err)
 	}
-
-	tpl := string(raw)
-	if opts.Engine == "template-wrapper" {
-		opts.WrapperTemplate = tpl
-	} else {
-		opts.DocumentTemplate = tpl
-	}
+	opts.Template = string(raw)
 	return opts, nil
 }
 
