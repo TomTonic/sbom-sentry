@@ -2,7 +2,7 @@
 package markdown
 
 import (
-	domain "github.com/TomTonic/extract-sbom/internal/report/internal/domain"
+	reportjson "github.com/TomTonic/extract-sbom/internal/report/internal/json"
 	model "github.com/TomTonic/extract-sbom/internal/report/internal/model"
 )
 
@@ -21,23 +21,23 @@ type ProcessingIssue = model.ProcessingIssue
 // ReportData aliases the shared report snapshot contract from model.
 type ReportData = model.ReportData
 
-// componentOccurrence aliases the report-domain occurrence view.
-type componentOccurrence = domain.ComponentOccurrence
+// componentOccurrence aliases the JSON-facade occurrence view.
+type componentOccurrence = reportjson.ComponentOccurrence
 
-// packageOccurrenceGroup aliases the report-domain occurrence grouping view.
-type packageOccurrenceGroup = domain.PackageOccurrenceGroup
+// packageOccurrenceGroup aliases the JSON-facade occurrence grouping view.
+type packageOccurrenceGroup = reportjson.PackageOccurrenceGroup
 
 // componentIndexStats aliases the occurrence indexing statistics view.
-type componentIndexStats = domain.ComponentIndexStats
+type componentIndexStats = reportjson.ComponentIndexStats
 
 // extractionStats aliases extraction aggregation counters.
-type extractionStats = domain.ExtractionStats
+type extractionStats = reportjson.ExtractionStats
 
 // scanStats aliases scan aggregation counters.
-type scanStats = domain.ScanStats
+type scanStats = reportjson.ScanStats
 
 // policyStats aliases policy aggregation counters.
-type policyStats = domain.PolicyStats
+type policyStats = reportjson.PolicyStats
 
 // processingEntry is a flattened log row for the processing-issues table.
 type processingEntry struct {

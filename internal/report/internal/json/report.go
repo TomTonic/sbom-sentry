@@ -16,6 +16,12 @@ import (
 // InputSummary aliases the shared report input summary contract.
 type InputSummary = model.InputSummary
 
+// ToolVersions aliases the shared report tool-version contract.
+type ToolVersions = model.ToolVersions
+
+// SandboxSummary aliases the shared sandbox summary contract.
+type SandboxSummary = model.SandboxSummary
+
 // ProcessingIssue aliases the shared structured processing issue contract.
 type ProcessingIssue = model.ProcessingIssue
 

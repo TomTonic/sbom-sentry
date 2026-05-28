@@ -8,7 +8,7 @@ import (
 	cdx "github.com/CycloneDX/cyclonedx-go"
 
 	"github.com/TomTonic/extract-sbom/internal/assembly"
-	domain "github.com/TomTonic/extract-sbom/internal/report/internal/domain"
+	reportjson "github.com/TomTonic/extract-sbom/internal/report/internal/json"
 )
 
 // writeSuppressionReport renders normalization/suppression evidence grouped by
@@ -39,7 +39,7 @@ func writeSuppressionReport(w io.Writer, suppressions []assembly.SuppressionReco
 	sortSuppressionRecords(weakDups)
 	sortSuppressionRecords(purlDups)
 
-	occurrences, _ := domain.CollectComponentOccurrences(bom)
+	occurrences, _ := reportjson.CollectComponentOccurrences(bom)
 	resolver := newSuppressionLinkResolver(occurrences)
 
 	// Summary counts.
@@ -148,7 +148,7 @@ func newSuppressionLinkResolver(occurrences []componentOccurrence) suppressionLi
 			BOMRef:  occ.ObjectID,
 			Name:    occ.PackageName,
 			FoundBy: occ.FoundBy,
-			Score:   domain.OccurrenceQualityScore(occ),
+			Score:   reportjson.OccurrenceQualityScore(occ),
 		}
 		for _, deliveryPath := range occ.DeliveryPaths {
 			resolver.byDeliveryPath[deliveryPath] = append(resolver.byDeliveryPath[deliveryPath], candidate)
@@ -214,7 +214,7 @@ func suppressedByCell(record assembly.SuppressionRecord, resolver suppressionLin
 		}
 		return fmt.Sprintf("*%s*", escapeMarkdownCell(reason))
 	}
-	return fmt.Sprintf("[%s](#%s)", escapeMarkdownCell(bomRef), domain.OccurrenceAnchorID(bomRef))
+	return fmt.Sprintf("[%s](#%s)", escapeMarkdownCell(bomRef), reportjson.OccurrenceAnchorID(bomRef))
 }
 
 // sortSuppressionRecords enforces deterministic ordering in suppression tables.

@@ -24,10 +24,18 @@ const (
 // The serializer emits a deterministic top-level structure and delegates
 // entity/projection/integrity construction to dedicated builders.
 func GenerateV2(data ReportData, w io.Writer) error {
-	report := buildJSONReportV2Skeleton(data, time.Now().UTC())
+	report := BuildV2Report(data)
 	encoder := json.NewEncoder(w)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(report)
+}
+
+// BuildV2Report assembles the canonical JSON v2 report model in memory.
+//
+// This allows other renderers to consume one normalized data source without
+// reparsing serialized JSON.
+func BuildV2Report(data ReportData) ReportV2 {
+	return buildJSONReportV2Skeleton(data, time.Now().UTC())
 }
 
 // buildJSONReportV2Skeleton assembles the complete report payload.

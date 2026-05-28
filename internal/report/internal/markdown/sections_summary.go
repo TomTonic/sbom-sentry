@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"io"
 
-	domain "github.com/TomTonic/extract-sbom/internal/report/internal/domain"
+	reportjson "github.com/TomTonic/extract-sbom/internal/report/internal/json"
 	"github.com/TomTonic/extract-sbom/internal/vulnscan"
 )
 
@@ -45,7 +45,7 @@ func writeSummary(w io.Writer, data ReportData, ext extractionStats, scn scanSta
 	fmt.Fprintln(w)
 
 	writeAnchoredHeading(w, 3, t.summaryKeyFindingsSection, anchorSummaryKeyFindings)
-	vulnMatches, vulnUnique, vulnAffected := domain.CollectVulnStats(data.Vulnerabilities)
+	vulnMatches, vulnUnique, vulnAffected := reportjson.CollectVulnStats(data.Vulnerabilities)
 	distinctPackages := countDistinctPackages(occurrences)
 	findings := summarizeFindings(ext, scn, idx, pol, len(data.ProcessingIssues), data.Vulnerabilities, vulnMatches, vulnUnique, vulnAffected, distinctPackages, t)
 	for _, finding := range findings {

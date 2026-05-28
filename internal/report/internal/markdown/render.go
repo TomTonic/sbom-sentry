@@ -7,7 +7,7 @@ import (
 	"strings"
 	texttemplate "text/template"
 
-	domain "github.com/TomTonic/extract-sbom/internal/report/internal/domain"
+	reportjson "github.com/TomTonic/extract-sbom/internal/report/internal/json"
 )
 
 // RenderEngine selects the backend used for human Markdown rendering.
@@ -39,6 +39,7 @@ type RenderOptions struct {
 // It separates expensive aggregation from output formatting.
 type markdownReportViewModel struct {
 	data         ReportData
+	report       reportjson.ReportV2
 	language     string
 	translations translations
 	sections     []reportSection
@@ -52,18 +53,21 @@ type markdownReportViewModel struct {
 // buildMarkdownReportViewModel derives deterministic section and statistics data
 // once so different renderer backends can reuse the same snapshot.
 func buildMarkdownReportViewModel(data ReportData, lang string) markdownReportViewModel {
-	occurrences, indexStats := domain.CollectComponentOccurrences(data.BOM)
+	report := reportjson.BuildV2Report(data)
+	sourceData := reportjson.ReportDataFromV2(report)
+	occurrences, indexStats := reportjson.CollectComponentOccurrences(sourceData.BOM)
 	t := getTranslations(lang)
 	return markdownReportViewModel{
-		data:         data,
+		data:         sourceData,
+		report:       report,
 		language:     lang,
 		translations: t,
 		sections:     reportSections(t),
 		occurrences:  occurrences,
 		indexStats:   indexStats,
-		extStats:     domain.CollectExtractionStats(data.Tree),
-		scnStats:     domain.CollectScanStats(data.Scans),
-		polStats:     domain.CollectPolicyStats(data.PolicyDecisions),
+		extStats:     reportjson.CollectExtractionStats(sourceData.Tree),
+		scnStats:     reportjson.CollectScanStats(sourceData.Scans),
+		polStats:     reportjson.CollectPolicyStats(sourceData.PolicyDecisions),
 	}
 }
 

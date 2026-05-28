@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/TomTonic/extract-sbom/internal/extract"
-	domain "github.com/TomTonic/extract-sbom/internal/report/internal/domain"
+	reportjson "github.com/TomTonic/extract-sbom/internal/report/internal/json"
 )
 
 // writeExtractionTree renders the extraction tree as an indented Markdown list
@@ -103,7 +103,7 @@ func writeResidualRisk(w io.Writer, data ReportData, ext extractionStats, scn sc
 			fmt.Sprintf(t.residualRiskNoComponentTasks, scn.NoComponentTasks, scn.Successful, samplePaths(scn.NoComponentPaths, t.noneValue)),
 			sectionLink(t.scanNoPackageIDsSection, anchorScanNoPackageIDs))
 	}
-	suppression := domain.CollectSuppressionStats(data.Suppressions)
+	suppression := reportjson.CollectSuppressionStats(data.Suppressions)
 	fileArtifactCount := suppression.FSArtifacts + suppression.LowValueFiles
 	if fileArtifactCount > 0 {
 		links := make([]string, 0, 2)
@@ -160,7 +160,7 @@ func samplePaths(paths []string, noneValue string) string {
 		return noneValue
 	}
 
-	unique := domain.SortedUniqueNonEmptyStrings(paths)
+	unique := reportjson.SortedUniqueNonEmptyStrings(paths)
 	if len(unique) <= maxCount {
 		return strings.Join(unique, "; ")
 	}
