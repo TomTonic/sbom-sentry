@@ -241,7 +241,7 @@ Status values:
 
 ### REP-ARCH-017 - Re-align test ownership and names
 
-- Status: `IN_PROGRESS`
+- Status: `DONE`
 - Objective: Move tests to the owning packages and rename them so file names
   reflect the implementation slices they validate.
 - Exit criteria:
@@ -275,4 +275,4 @@ For every future refactoring commit in `internal/report`, include:
 
 ## Current Next Step
 
-`REP-ARCH-017 - Re-align test ownership and names`
+`REP-ARCH-018 - Documentation sync and final cleanup`
