@@ -10,9 +10,16 @@ and suitable for downstream vulnerability assessment.
 
 Given exactly one delivery file as input, extract-sbom produces:
 
-1. A **single, consolidated Software Bill of Materials (SBOM)**  
-   - Default format: **CycloneDX JSON**
+1. A **single, consolidated Software Bill of Materials (SBOM)**
+   - Default format: **CycloneDX 1.6 JSON** (`--format cyclonedx-json`)
+   - Optional: **CycloneDX 1.6 XML** (`--format cyclonedx-xml`)
+   - Optional: **SPDX 2.3 JSON** (`--format spdx-json`)
 2. A **formal audit report** explaining what was processed, how, and with which limitations
+   - Human-readable Markdown (`--report markdown`, default)
+   - Standalone HTML (`--report html`)
+   - Machine-readable JSON (`--report json`)
+   - SARIF 2.1.0 for CI security integration (`--report sarif`)
+   - Multiple formats simultaneously (`--report both`, `--report all`)
 
 The input is intentionally restricted to **one file per run**. The file type may be
 ZIP, TAR, compressed TAR, MSI, or another supported delivery/container format.
@@ -98,6 +105,8 @@ Recursive extraction applies **only to container formats not directly supported 
 Examples include:
 
 - ZIP, CAB, MSI, 7z, TAR variants
+- ISO 9660 disc images, CPIO archives
+- Squashfs filesystem images (including Snap packages), AppImage bundles
 - Arbitrary nesting combinations thereof
 
 Encrypted archive behavior requirements:
@@ -411,9 +420,10 @@ All relevant code must be written in **Go**.
 
 - Dependencies on external binaries and libraries must be kept minimal
 - The concrete selection of helper tools is a solution design decision and must be documented
-- **7-Zip** is the preferred extractor for Microsoft CAB, MSI, and related formats
-- **7-Zip** is also the fallback extractor for encrypted ZIP archives
+- **7-Zip** is the preferred extractor for Microsoft CAB, MSI, ISO, CPIO, and related formats
+- **7-Zip** is also the fallback extractor for encrypted ZIP archives and Squashfs images (when `unsquashfs` is unavailable)
 - **unshield** is the required extractor for InstallShield proprietary CABs
+- **unsquashfs** is the preferred extractor for Squashfs filesystem images and Snap packages; 7-Zip is the fallback
 - **Syft** is mandatory, preferably used in library mode
 - **Grype** is optional and only used when `--grype` is set
 - External extraction tools are optional at runtime; if missing, the corresponding
@@ -449,12 +459,14 @@ The report must enable a third party to answer:
 
 ### 10.3 Report Representation Modes
 
-The audit output shall support both of the following forms:
+The audit output shall support all of the following forms:
 
-- **Human-readable report** (default)
-- **Machine-readable report** for downstream automation
+- **Human-readable report** (default, Markdown) — for manual review, PDF pipelines, and audit workflows
+- **Standalone HTML report** — self-contained (no external dependencies), for sharing with auditors and browser viewing
+- **Machine-readable report** (JSON) — for downstream automation and pipeline integration
+- **SARIF 2.1.0** — for direct integration with GitHub Advanced Security, GitLab SAST, and compatible CI platforms; one result per vulnerability match (requires `--grype`)
 
-The chosen output mode or modes must be selectable explicitly.
+The chosen output mode or modes must be selectable explicitly via `--report`. The `both` mode produces markdown + json; `all` produces markdown + json + HTML.
 
 ### 10.4 Required Report Content
 
@@ -489,7 +501,7 @@ At minimum:
 
 extract-sbom is complete when:
 
-- One input file yields exactly one SBOM and one audit report
+- One input file yields exactly one SBOM (in CycloneDX JSON, CycloneDX XML, or SPDX 2.3 JSON) and one or more audit reports (Markdown, HTML, JSON, SARIF, or combinations thereof)
 - Nested container formats are processed safely and recursively
 - CAB and MSI contents are extractable and auditable
 - Containers always appear as SBOM components

@@ -82,7 +82,7 @@ JSON
 	cfg := config.DefaultConfig()
 	cfg.InputPath = input
 	cfg.OutputDir = dir
-	cfg.ReportMode = config.ReportBoth
+	cfg.ReportSelection = config.ReportBoth
 	cfg.Unsafe = true
 	cfg.GrypeEnabled = true
 
@@ -97,7 +97,7 @@ JSON
 	humanReport := filepath.Join(dir, "delivery.report.md")
 	rawHuman, err := os.ReadFile(humanReport)
 	if err != nil {
-		t.Fatalf("read human report: %v", err)
+		t.Fatalf("read markdown report: %v", err)
 	}
 	outHuman := string(rawHuman)
 	for _, want := range []string{
@@ -105,14 +105,14 @@ JSON
 		"Vulnerability findings: no matched vulnerabilities",
 	} {
 		if !strings.Contains(outHuman, want) {
-			t.Fatalf("human report missing %q", want)
+			t.Fatalf("markdown report missing %q", want)
 		}
 	}
 
 	machineReport := filepath.Join(dir, "delivery.report.json")
 	rawMachine, err := os.ReadFile(machineReport)
 	if err != nil {
-		t.Fatalf("read machine report: %v", err)
+		t.Fatalf("read JSON report: %v", err)
 	}
 	outMachine := string(rawMachine)
 	for _, want := range []string{
@@ -123,7 +123,7 @@ JSON
 		`"dbSchemaVersion": "v6.1.4"`,
 	} {
 		if !strings.Contains(outMachine, want) {
-			t.Fatalf("machine report missing %q", want)
+			t.Fatalf("JSON report missing %q", want)
 		}
 	}
 }
@@ -148,7 +148,7 @@ func TestGrypeIntegrationBinaryMissing(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.InputPath = input
 	cfg.OutputDir = dir
-	cfg.ReportMode = config.ReportBoth
+	cfg.ReportSelection = config.ReportBoth
 	cfg.Unsafe = true
 	cfg.GrypeEnabled = true
 
@@ -163,16 +163,16 @@ func TestGrypeIntegrationBinaryMissing(t *testing.T) {
 	humanReport := filepath.Join(dir, "delivery.report.md")
 	rawHuman, err := os.ReadFile(humanReport)
 	if err != nil {
-		t.Fatalf("read human report: %v", err)
+		t.Fatalf("read markdown report: %v", err)
 	}
 	if !strings.Contains(string(rawHuman), "Vulnerability enrichment state: `unavailable`") {
-		t.Fatalf("human report should record unavailable state; got:\n%s", string(rawHuman))
+		t.Fatalf("markdown report should record unavailable state; got:\n%s", string(rawHuman))
 	}
 
 	machineReport := filepath.Join(dir, "delivery.report.json")
 	rawMachine, err := os.ReadFile(machineReport)
 	if err != nil {
-		t.Fatalf("read machine report: %v", err)
+		t.Fatalf("read JSON report: %v", err)
 	}
 	for _, want := range []string{
 		`"state": "unavailable"`,
@@ -180,7 +180,7 @@ func TestGrypeIntegrationBinaryMissing(t *testing.T) {
 		`"grype-not-found"`,
 	} {
 		if !strings.Contains(string(rawMachine), want) {
-			t.Fatalf("machine report missing %q\nfull output:\n%s", want, string(rawMachine))
+			t.Fatalf("JSON report missing %q\nfull output:\n%s", want, string(rawMachine))
 		}
 	}
 }
@@ -207,7 +207,7 @@ echo "this is not valid json"
 	cfg := config.DefaultConfig()
 	cfg.InputPath = input
 	cfg.OutputDir = dir
-	cfg.ReportMode = config.ReportBoth
+	cfg.ReportSelection = config.ReportBoth
 	cfg.Unsafe = true
 	cfg.GrypeEnabled = true
 
@@ -222,16 +222,16 @@ echo "this is not valid json"
 	humanReport := filepath.Join(dir, "delivery.report.md")
 	rawHuman, err := os.ReadFile(humanReport)
 	if err != nil {
-		t.Fatalf("read human report: %v", err)
+		t.Fatalf("read markdown report: %v", err)
 	}
 	if !strings.Contains(string(rawHuman), "Vulnerability enrichment state: `unavailable`") {
-		t.Fatalf("human report should record unavailable state; got:\n%s", string(rawHuman))
+		t.Fatalf("markdown report should record unavailable state; got:\n%s", string(rawHuman))
 	}
 
 	machineReport := filepath.Join(dir, "delivery.report.json")
 	rawMachine, err := os.ReadFile(machineReport)
 	if err != nil {
-		t.Fatalf("read machine report: %v", err)
+		t.Fatalf("read JSON report: %v", err)
 	}
 	for _, want := range []string{
 		`"state": "unavailable"`,
@@ -239,7 +239,7 @@ echo "this is not valid json"
 		`"grype-parse"`,
 	} {
 		if !strings.Contains(string(rawMachine), want) {
-			t.Fatalf("machine report missing %q\nfull output:\n%s", want, string(rawMachine))
+			t.Fatalf("JSON report missing %q\nfull output:\n%s", want, string(rawMachine))
 		}
 	}
 }

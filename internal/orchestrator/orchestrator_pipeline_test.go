@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	cdx "github.com/CycloneDX/cyclonedx-go"
@@ -62,7 +63,7 @@ func TestRunWithValidZIPProducesOutput(t *testing.T) {
 	cfg.InputPath = inputPath
 	cfg.OutputDir = dir
 	cfg.Unsafe = true
-	cfg.ReportMode = config.ReportBoth
+	cfg.ReportSelection = config.ReportBoth
 
 	result := Run(context.Background(), cfg)
 
@@ -153,7 +154,7 @@ func TestRunWithHumanReportMode(t *testing.T) {
 	cfg.InputPath = inputPath
 	cfg.OutputDir = dir
 	cfg.Unsafe = true
-	cfg.ReportMode = config.ReportHuman
+	cfg.ReportSelection = config.ReportMarkdown
 
 	result := Run(context.Background(), cfg)
 
@@ -170,6 +171,42 @@ func TestRunWithHumanReportMode(t *testing.T) {
 	}
 }
 
+func TestRunWithHumanTemplateWrapperFile(t *testing.T) {
+	dir := t.TempDir()
+	inputPath := createMinimalZIP(t, dir, "delivery.zip")
+	templatePath := filepath.Join(dir, "human-wrapper.tmpl")
+	if err := os.WriteFile(templatePath, []byte("BEGIN\n{{.Body}}\nEND"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config.DefaultConfig()
+	cfg.InputPath = inputPath
+	cfg.OutputDir = dir
+	cfg.Unsafe = true
+	cfg.ReportSelection = config.ReportMarkdown
+	cfg.MarkdownRenderEngine = "template-wrapper"
+	cfg.MarkdownTemplateFile = templatePath
+
+	result := Run(context.Background(), cfg)
+
+	if result.ExitCode == ExitHardSecurity && result.Error != nil {
+		t.Fatalf("pipeline failed: %v", result.Error)
+	}
+
+	reportPath := filepath.Join(dir, "delivery.report.md")
+	raw, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatalf("read markdown report: %v", err)
+	}
+	body := string(raw)
+	if !strings.HasPrefix(body, "BEGIN\n") {
+		t.Fatalf("expected wrapper prefix in report")
+	}
+	if !strings.HasSuffix(body, "END") {
+		t.Fatalf("expected wrapper suffix in report")
+	}
+}
+
 func TestRunWithMachineReportMode(t *testing.T) {
 	dir := t.TempDir()
 	inputPath := createMinimalZIP(t, dir, "delivery.zip")
@@ -178,7 +215,7 @@ func TestRunWithMachineReportMode(t *testing.T) {
 	cfg.InputPath = inputPath
 	cfg.OutputDir = dir
 	cfg.Unsafe = true
-	cfg.ReportMode = config.ReportMachine
+	cfg.ReportSelection = config.ReportJSON
 
 	result := Run(context.Background(), cfg)
 
@@ -212,7 +249,7 @@ func TestRunBlockedSBOMPathReportsIssue(t *testing.T) {
 	cfg.InputPath = inputPath
 	cfg.OutputDir = dir
 	cfg.Unsafe = true
-	cfg.ReportMode = config.ReportHuman
+	cfg.ReportSelection = config.ReportMarkdown
 
 	result := Run(context.Background(), cfg)
 
@@ -239,7 +276,7 @@ func TestRunBlockedHumanReportPathReportsIssue(t *testing.T) {
 	dir := t.TempDir()
 	inputPath := createMinimalZIP(t, dir, "delivery.zip")
 
-	// Block the human report path.
+	// Block the markdown report path.
 	blockedPath := filepath.Join(dir, "delivery.report.md")
 	if err := os.MkdirAll(blockedPath, 0o750); err != nil {
 		t.Fatal(err)
@@ -249,19 +286,19 @@ func TestRunBlockedHumanReportPathReportsIssue(t *testing.T) {
 	cfg.InputPath = inputPath
 	cfg.OutputDir = dir
 	cfg.Unsafe = true
-	cfg.ReportMode = config.ReportHuman
+	cfg.ReportSelection = config.ReportMarkdown
 
 	result := Run(context.Background(), cfg)
 
 	foundIssue := false
 	for _, iss := range result.Issues {
-		if iss.Stage == "create-report-human" {
+		if iss.Stage == "create-report-markdown" {
 			foundIssue = true
 			break
 		}
 	}
 	if !foundIssue {
-		t.Error("expected create-report-human issue in result")
+		t.Error("expected create-report-markdown issue in result")
 	}
 }
 
@@ -280,19 +317,19 @@ func TestRunWithMachineOnlyBlockedReportPath(t *testing.T) {
 	cfg.InputPath = inputPath
 	cfg.OutputDir = dir
 	cfg.Unsafe = true
-	cfg.ReportMode = config.ReportMachine
+	cfg.ReportSelection = config.ReportJSON
 
 	result := Run(context.Background(), cfg)
 
 	foundIssue := false
 	for _, iss := range result.Issues {
-		if iss.Stage == "create-report-machine" {
+		if iss.Stage == "create-report-json" {
 			foundIssue = true
 			break
 		}
 	}
 	if !foundIssue {
-		t.Error("expected create-report-machine issue in result")
+		t.Error("expected create-report-json issue in result")
 	}
 }
 
@@ -317,7 +354,7 @@ func TestRunBothReportsBlockedSBOMAndReport(t *testing.T) {
 	cfg.InputPath = inputPath
 	cfg.OutputDir = dir
 	cfg.Unsafe = true
-	cfg.ReportMode = config.ReportBoth
+	cfg.ReportSelection = config.ReportBoth
 
 	result := Run(context.Background(), cfg)
 
@@ -329,8 +366,8 @@ func TestRunBothReportsBlockedSBOMAndReport(t *testing.T) {
 	if !stagesSeen["write-sbom"] {
 		t.Error("expected write-sbom issue")
 	}
-	if !stagesSeen["create-report-human"] {
-		t.Error("expected create-report-human issue")
+	if !stagesSeen["create-report-markdown"] {
+		t.Error("expected create-report-markdown issue")
 	}
 }
 
@@ -349,7 +386,7 @@ func TestRunWithReadOnlyOutputDir(t *testing.T) {
 	cfg.InputPath = inputPath
 	cfg.OutputDir = outDir
 	cfg.Unsafe = true
-	cfg.ReportMode = config.ReportBoth
+	cfg.ReportSelection = config.ReportBoth
 
 	// Make output dir read-only to force write failures.
 	if err := os.Chmod(outDir, 0o555); err != nil { //nolint:gosec // test: intentionally restrictive
@@ -384,14 +421,14 @@ func TestRunInvalidConfigEmptyInput(t *testing.T) {
 	}
 }
 
-// TestRunReportBothBlockedMachineTriggersRewrite exercises the human-report
-// rewrite path that fires when the machine report adds issues after the
-// human report was already written.
+// TestRunReportBothBlockedMachineTriggersRewrite exercises the markdown-report
+// rewrite path that fires when the JSON report adds issues after the
+// markdown report was already written.
 func TestRunReportBothBlockedMachineTriggersRewrite(t *testing.T) {
 	dir := t.TempDir()
 	inputPath := createMinimalZIP(t, dir, "delivery.zip")
 
-	// Block only the machine report JSON path so human succeeds.
+	// Block only the JSON report JSON path so markdown succeeds.
 	blockedJSON := filepath.Join(dir, "delivery.report.json")
 	if err := os.MkdirAll(blockedJSON, 0o750); err != nil {
 		t.Fatal(err)
@@ -401,29 +438,29 @@ func TestRunReportBothBlockedMachineTriggersRewrite(t *testing.T) {
 	cfg.InputPath = inputPath
 	cfg.OutputDir = dir
 	cfg.Unsafe = true
-	cfg.ReportMode = config.ReportBoth
+	cfg.ReportSelection = config.ReportBoth
 
 	result := Run(context.Background(), cfg)
 
 	// Machine report should have failed.
 	foundMachineIssue := false
 	for _, iss := range result.Issues {
-		if iss.Stage == "create-report-machine" {
+		if iss.Stage == "create-report-json" {
 			foundMachineIssue = true
 			break
 		}
 	}
 	if !foundMachineIssue {
-		t.Error("expected create-report-machine issue")
+		t.Error("expected create-report-json issue")
 	}
 
 	// Human report should still exist (rewritten with updated issues).
 	humanPath := filepath.Join(dir, "delivery.report.md")
 	info, err := os.Stat(humanPath)
 	if err != nil {
-		t.Errorf("expected human report to exist after rewrite: %v", err)
+		t.Errorf("expected markdown report to exist after rewrite: %v", err)
 	} else if info.Size() == 0 {
-		t.Error("human report should not be empty after rewrite")
+		t.Error("markdown report should not be empty after rewrite")
 	}
 }
 

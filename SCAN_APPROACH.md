@@ -44,11 +44,13 @@ additional optional phase.
 
 **Phase 1 — Extraction.** `internal/extract` walks the delivery recursively
 and builds the extraction tree. For every file it encounters, it identifies the
-format and assigns a status. Container formats that extract-sbom can open are
-unpacked under strict safety limits. Formats that Syft understands natively as
-intact package formats are marked `syft-native` and left on disk. Everything
-else is recorded as a `skipped` leaf. At the end of Phase 1, the tree and all
-statuses are final.
+format and assigns a status. Container formats that extract-sbom can open are unpacked under strict safety
+limits. Supported extraction formats include ZIP, TAR (all compressed variants),
+CAB, MSI, 7z, RAR, InstallShield CAB, ISO 9660, CPIO, and Squashfs/Snap images.
+AppImage is detected but not yet extracted. Formats that Syft understands
+natively as intact package formats are marked `syft-native` and left on disk.
+Everything else is recorded as a `skipped` leaf. At the end of Phase 1, the
+tree and all statuses are final.
 
 **Phase 2 — Scanning.** `internal/scan` sends nodes to Syft based on their
 statuses. Only `extracted` and `syft-native` nodes become scan targets. In
@@ -502,8 +504,20 @@ extraction directory, but finds no package manifest.
 ---
 
 After all components are built, assembly sorts packages, properties, and
-dependencies into a canonical order, then writes the single CycloneDX BOM and
-the parallel audit report.
+dependencies into a canonical order, then writes the SBOM and the audit report.
+
+**SBOM output format** is controlled by `--format`:
+- `cyclonedx-json` (default): CycloneDX 1.6 JSON (`*.cdx.json`)
+- `cyclonedx-xml`: CycloneDX 1.6 XML (`*.cdx.xml`)
+- `spdx-json`: SPDX 2.3 JSON (`*.spdx.json`) — components mapped to SPDX packages with PURL download locations and DEPENDS_ON relationships derived from the CycloneDX dependency graph
+
+**Audit report format** is controlled by `--report`:
+- `markdown` (default): Markdown (`*.report.md`)
+- `html`: standalone HTML (`*.report.html`)
+- `json`: JSON (`*.report.json`)
+- `sarif`: SARIF 2.1.0 (`*.sarif.json`) — requires `--grype` to populate vulnerability results
+- `both`: Markdown + JSON
+- `all`: Markdown + JSON + HTML
 
 ### 8.1 How Deduplication Works
 

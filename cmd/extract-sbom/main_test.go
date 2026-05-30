@@ -142,6 +142,8 @@ func TestRootCmdFlagsExist(t *testing.T) {
 		"mode",
 		"report",
 		"language",
+		"markdown-render-engine",
+		"markdown-template-file",
 		"root-manufacturer",
 		"root-name",
 		"root-version",
@@ -191,7 +193,7 @@ func TestLoadConfigRespectsPrecedence(t *testing.T) {
 		"work-dir: \"" + configWorkDir + "\"\n" +
 		"policy: partial\n" +
 		"mode: physical\n" +
-		"report: machine\n" +
+		"report: json\n" +
 		"language: de\n" +
 		"root-version: config-version\n" +
 		"max-files: 321\n" +
@@ -233,8 +235,8 @@ func TestLoadConfigRespectsPrecedence(t *testing.T) {
 	if cfg.RootMetadata.Version != "flag-version" {
 		t.Fatalf("RootMetadata.Version = %q, want %q", cfg.RootMetadata.Version, "flag-version")
 	}
-	if cfg.ReportMode != config.ReportBoth {
-		t.Fatalf("ReportMode = %v, want %v", cfg.ReportMode, config.ReportBoth)
+	if cfg.ReportSelection != config.ReportBoth {
+		t.Fatalf("ReportSelection = %v, want %v", cfg.ReportSelection, config.ReportBoth)
 	}
 	if cfg.PolicyMode != config.PolicyPartial {
 		t.Fatalf("PolicyMode = %v, want %v", cfg.PolicyMode, config.PolicyPartial)
@@ -310,6 +312,68 @@ func TestLoadConfigParsesGrypeFlag(t *testing.T) {
 	}
 	if !cfg.GrypeEnabled {
 		t.Fatal("GrypeEnabled = false, want true")
+	}
+}
+
+func TestLoadConfigParsesHumanRenderOptions(t *testing.T) {
+	dir := t.TempDir()
+	inputPath := filepath.Join(dir, "delivery.zip")
+	if err := os.WriteFile(inputPath, []byte("PK\x03\x04fake"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tplPath := filepath.Join(dir, "human.tpl")
+	if err := os.WriteFile(tplPath, []byte("{{.Body}}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := rootCmd()
+	if err := cmd.Flags().Set("markdown-render-engine", "template-wrapper"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Flags().Set("markdown-template-file", tplPath); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := loadConfig(cmd, []string{inputPath})
+	if err != nil {
+		t.Fatalf("loadConfig returned error: %v", err)
+	}
+	if cfg.MarkdownRenderEngine != "template-wrapper" {
+		t.Fatalf("MarkdownRenderEngine = %q, want %q", cfg.MarkdownRenderEngine, "template-wrapper")
+	}
+	if cfg.MarkdownTemplateFile != tplPath {
+		t.Fatalf("MarkdownTemplateFile = %q, want %q", cfg.MarkdownTemplateFile, tplPath)
+	}
+}
+
+func TestLoadConfigParsesDeprecatedHumanRenderFlags(t *testing.T) {
+	dir := t.TempDir()
+	inputPath := filepath.Join(dir, "delivery.zip")
+	if err := os.WriteFile(inputPath, []byte("PK\x03\x04fake"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tplPath := filepath.Join(dir, "legacy-human.tpl")
+	if err := os.WriteFile(tplPath, []byte("{{.Body}}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := rootCmd()
+	if err := cmd.Flags().Set("human-render-engine", "template-wrapper"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Flags().Set("human-template-file", tplPath); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := loadConfig(cmd, []string{inputPath})
+	if err != nil {
+		t.Fatalf("loadConfig returned error: %v", err)
+	}
+	if cfg.MarkdownRenderEngine != "template-wrapper" {
+		t.Fatalf("MarkdownRenderEngine = %q, want %q", cfg.MarkdownRenderEngine, "template-wrapper")
+	}
+	if cfg.MarkdownTemplateFile != tplPath {
+		t.Fatalf("MarkdownTemplateFile = %q, want %q", cfg.MarkdownTemplateFile, tplPath)
 	}
 }
 

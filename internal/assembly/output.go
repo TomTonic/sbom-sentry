@@ -11,7 +11,7 @@ import (
 	cdx "github.com/CycloneDX/cyclonedx-go"
 )
 
-// WriteSBOM persists a consolidated CycloneDX BOM as pretty-printed JSON.
+// WriteSBOM persists a consolidated CycloneDX BOM as pretty-printed JSON or XML.
 //
 // Why this exists:
 // Assembly returns an in-memory BOM, while CLI and integration workflows need
@@ -19,20 +19,26 @@ import (
 //
 // Typical use:
 // Call WriteSBOM with the result from Assemble and the configured output path
-// (usually "<output-dir>/<input>.cdx.json").
+// (usually "<output-dir>/<input>.cdx.json" or "<output-dir>/<input>.cdx.xml").
 //
 // Parameters:
 // - bom: CycloneDX BOM to encode
 // - path: target file path to create or truncate
+// - format: SBOM format string ("cyclonedx-json" or "cyclonedx-xml")
 //
 // Returns an error when file creation fails or encoding cannot complete.
-func WriteSBOM(bom *cdx.BOM, path string) error {
+func WriteSBOM(bom *cdx.BOM, path string, format string) error {
 	f, err := os.Create(path)
 	if err != nil {
 		return fmt.Errorf("assembly: create SBOM file %s: %w", path, err)
 	}
 
-	encoder := cdx.NewBOMEncoder(f, cdx.BOMFileFormatJSON)
+	fileFormat := cdx.BOMFileFormatJSON
+	if format == "cyclonedx-xml" {
+		fileFormat = cdx.BOMFileFormatXML
+	}
+
+	encoder := cdx.NewBOMEncoder(f, fileFormat)
 	encoder.SetPretty(true)
 
 	if err := encoder.Encode(bom); err != nil {

@@ -244,7 +244,7 @@ func runHumanReportForInput(t *testing.T, inputPath string, tweak func(*config.C
 	cfg.InputPath = inputPath
 	cfg.OutputDir = filepath.Dir(inputPath)
 	cfg.Unsafe = true
-	cfg.ReportMode = config.ReportHuman
+	cfg.ReportSelection = config.ReportMarkdown
 	cfg.PolicyMode = config.PolicyPartial
 	if tweak != nil {
 		tweak(&cfg)

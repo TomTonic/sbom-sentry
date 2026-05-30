@@ -133,6 +133,14 @@ func extractRecursive(ctx context.Context, node *ExtractionNode, filePath string
 		err = extract7zWithPasswords(extractCtx, node, filePath, sb, cfg.WorkDir, cfg.Limits, cfg.Passwords)
 	case identify.InstallShieldCAB:
 		err = extractUnshield(extractCtx, node, filePath, sb, cfg.WorkDir, cfg.Limits, cfg.Passwords)
+	case identify.ISO, identify.CPIO:
+		err = extract7zWithPasswords(extractCtx, node, filePath, sb, cfg.WorkDir, cfg.Limits, cfg.Passwords)
+	case identify.Squashfs:
+		err = extractSquashfs(extractCtx, node, filePath, sb, cfg.WorkDir, cfg.Limits)
+	case identify.AppImage:
+		node.Status = StatusToolMissing
+		node.StatusDetail = "AppImage extraction is not yet supported; scan the embedded squashfs manually"
+		node.Tool = "unsquashfs"
 	default:
 		node.Status = StatusSkipped
 		node.StatusDetail = fmt.Sprintf("no extraction handler for format %s", info.Format)

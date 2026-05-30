@@ -102,16 +102,13 @@ func Run(ctx context.Context, cfg config.Config) Result {
 	cfg.EmitProgress(config.ProgressNormal, "[extract-sbom] step 3/8: resolving sandbox")
 	sb, resolveErr := sandbox.Resolve(cfg)
 	addIssue("sandbox-resolve", resolveErr)
-	sandboxInfo := report.SandboxSummary{
-		UnsafeOvr: cfg.Unsafe,
-		Name:      sb.Name(),
-		Available: sb.Available(),
-	}
-	cfg.EmitProgress(config.ProgressNormal, "[extract-sbom] sandbox: %s (available=%t)", sandboxInfo.Name, sandboxInfo.Available)
+	sandboxName := sb.Name()
+	sandboxAvailable := sb.Available()
+	cfg.EmitProgress(config.ProgressNormal, "[extract-sbom] sandbox: %s (available=%t)", sandboxName, sandboxAvailable)
 
 	// Check external tool availability early so users don't wait minutes
 	// before discovering that MSI/CAB/7z extraction will fail.
-	if !sb.Available() {
+	if !sandboxAvailable {
 		cfg.EmitProgress(config.ProgressNormal,
 			"[extract-sbom] WARNING: sandbox unavailable and --unsafe not set. "+
 				"Extraction of MSI, CAB, 7z, ISO, and InstallShield formats will be skipped. "+
@@ -129,6 +126,10 @@ func Run(ctx context.Context, cfg config.Config) Result {
 			cfg.EmitProgress(config.ProgressNormal,
 				"[extract-sbom] WARNING: unshield not found on PATH. InstallShield CAB extraction will fail.")
 			addIssue("tool-availability", fmt.Errorf("unshield not found on PATH"))
+		}
+		if !extract.IsToolAvailable("unsquashfs") {
+			cfg.EmitProgress(config.ProgressNormal,
+				"[extract-sbom] INFO: unsquashfs not found on PATH. SquashFS extraction will fall back to 7zz.")
 		}
 	}
 
@@ -216,9 +217,16 @@ func Run(ctx context.Context, cfg config.Config) Result {
 		} else {
 			// Write SBOM.
 			inputBase := strings.TrimSuffix(filepath.Base(cfg.InputPath), filepath.Ext(cfg.InputPath))
-			sbomCandidate := filepath.Join(cfg.OutputDir, inputBase+".cdx.json")
+			sbomExt := sbomExtension(cfg.SBOMFormat)
+			sbomCandidate := filepath.Join(cfg.OutputDir, inputBase+sbomExt)
 			sbomPath = sbomCandidate
-			if writeErr := assembly.WriteSBOM(bom, sbomPath); writeErr != nil {
+			var writeErr error
+			if cfg.SBOMFormat == "spdx-json" {
+				writeErr = assembly.WriteSBOMSPDX(bom, sbomPath)
+			} else {
+				writeErr = assembly.WriteSBOM(bom, sbomPath, cfg.SBOMFormat)
+			}
+			if writeErr != nil {
 				addIssue("write-sbom", writeErr)
 				policyEngine.Evaluate(policy.Violation{
 					Type:     "write-sbom",
@@ -247,99 +255,117 @@ func Run(ctx context.Context, cfg config.Config) Result {
 	endTime := time.Now()
 	buildReportData := func() report.ReportData {
 		processingIssues := append([]report.ProcessingIssue(nil), issues...)
-		toolVersions := report.ToolVersions{
-			SevenZip: extract.GetUsedSevenZipVersion(),
-			Unshield: extract.GetUsedUnshieldVersion(),
-		}
+		rd := report.ReportData{}
+		rd.Input = inputSummary
+		rd.Generator = generatorInfo
+		rd.Config = cfg
+		rd.Tree = tree
+		rd.Scans = scans
+		rd.Vulnerabilities = vulnResult
+		rd.PolicyDecisions = policyEngine.Decisions()
+		rd.SandboxInfo.UnsafeOvr = cfg.Unsafe
+		rd.SandboxInfo.Name = sandboxName
+		rd.SandboxInfo.Available = sandboxAvailable
+		rd.ProcessingIssues = processingIssues
+		rd.StartTime = startTime
+		rd.EndTime = endTime
+		rd.BOM = assembledBOM
+		rd.SBOMPath = sbomPath
+		rd.Suppressions = suppressions
+		rd.ToolVersions.SevenZip = extract.GetUsedSevenZipVersion()
+		rd.ToolVersions.Unshield = extract.GetUsedUnshieldVersion()
+		rd.ToolVersions.Unsquashfs = extract.GetUsedUnsquashfsVersion()
 		if vulnResult != nil && vulnResult.GrypeVersion != "" {
-			toolVersions.Grype = "grype " + vulnResult.GrypeVersion
+			rd.ToolVersions.Grype = "grype " + vulnResult.GrypeVersion
 			if vulnResult.DBSchemaVersion != "" {
-				toolVersions.GrypeDB = "db: " + vulnResult.DBSchemaVersion
+				rd.ToolVersions.GrypeDB = "db: " + vulnResult.DBSchemaVersion
 				if vulnResult.DBBuilt != "" {
-					toolVersions.GrypeDB += ", built " + vulnResult.DBBuilt
+					rd.ToolVersions.GrypeDB += ", built " + vulnResult.DBBuilt
 				}
 			}
 		}
-		return report.ReportData{
-			Input:            inputSummary,
-			Generator:        generatorInfo,
-			Config:           cfg,
-			Tree:             tree,
-			Scans:            scans,
-			Vulnerabilities:  vulnResult,
-			PolicyDecisions:  policyEngine.Decisions(),
-			SandboxInfo:      sandboxInfo,
-			ProcessingIssues: processingIssues,
-			StartTime:        startTime,
-			EndTime:          endTime,
-			BOM:              assembledBOM,
-			SBOMPath:         sbomPath,
-			Suppressions:     suppressions,
-			ToolVersions:     toolVersions,
-		}
+		return rd
+	}
+
+	var markdownRenderConfig markdownRenderConfig
+	var markdownOptionsErr error
+	switch cfg.ReportSelection {
+	case config.ReportMarkdown, config.ReportBoth, config.ReportAll:
+		markdownRenderConfig, markdownOptionsErr = markdownRenderOptionsFromConfig(cfg)
 	}
 
 	inputBase := strings.TrimSuffix(filepath.Base(cfg.InputPath), filepath.Ext(cfg.InputPath))
 	var reportPath string
-	var humanPath string
-	humanIssueCount := -1
+	var markdownPath string
+	markdownIssueCount := -1
 
-	switch cfg.ReportMode {
-	case config.ReportHuman, config.ReportBoth:
-		humanPath = filepath.Join(cfg.OutputDir, inputBase+".report.md")
-		f, ferr := os.Create(humanPath)
+	switch cfg.ReportSelection {
+	case config.ReportMarkdown, config.ReportBoth, config.ReportAll:
+		markdownPath = filepath.Join(cfg.OutputDir, inputBase+".report.md")
+		f, ferr := os.Create(markdownPath)
 		if ferr != nil {
-			addIssue("create-report-human", ferr)
+			addIssue("create-report-markdown", ferr)
 			if fatalErr == nil {
 				fatalErr = fmt.Errorf("create report: %w", ferr)
 			}
 		} else {
-			if werr := report.GenerateHuman(buildReportData(), cfg.Language, f); werr != nil {
+			if markdownOptionsErr != nil {
 				if cerr := f.Close(); cerr != nil {
-					addIssue("close-report-human", cerr)
+					addIssue("close-report-markdown", cerr)
 					if fatalErr == nil {
 						fatalErr = fmt.Errorf("close report: %w", cerr)
 					}
 				}
-				addIssue("write-report-human", werr)
+				addIssue("write-report-markdown", markdownOptionsErr)
+				if fatalErr == nil {
+					fatalErr = fmt.Errorf("write report: %w", markdownOptionsErr)
+				}
+			} else if werr := report.GenerateMarkdownWithEngine(buildReportData(), cfg.Language, f, markdownRenderConfig.Engine, markdownRenderConfig.Template); werr != nil {
+				if cerr := f.Close(); cerr != nil {
+					addIssue("close-report-markdown", cerr)
+					if fatalErr == nil {
+						fatalErr = fmt.Errorf("close report: %w", cerr)
+					}
+				}
+				addIssue("write-report-markdown", werr)
 				if fatalErr == nil {
 					fatalErr = fmt.Errorf("write report: %w", werr)
 				}
 			} else if cerr := f.Close(); cerr != nil {
-				addIssue("close-report-human", cerr)
+				addIssue("close-report-markdown", cerr)
 				if fatalErr == nil {
 					fatalErr = fmt.Errorf("close report: %w", cerr)
 				}
 			} else {
-				reportPath = humanPath
-				humanIssueCount = len(issues)
+				reportPath = markdownPath
+				markdownIssueCount = len(issues)
 			}
 		}
 	}
 
-	switch cfg.ReportMode {
-	case config.ReportMachine, config.ReportBoth:
+	switch cfg.ReportSelection {
+	case config.ReportJSON, config.ReportBoth, config.ReportAll:
 		jsonPath := filepath.Join(cfg.OutputDir, inputBase+".report.json")
 		f, ferr := os.Create(jsonPath)
 		if ferr != nil {
-			addIssue("create-report-machine", ferr)
+			addIssue("create-report-json", ferr)
 			if fatalErr == nil {
 				fatalErr = fmt.Errorf("create JSON report: %w", ferr)
 			}
 		} else {
-			if werr := report.GenerateMachine(buildReportData(), f); werr != nil {
+			if werr := report.GenerateJSON(buildReportData(), f); werr != nil {
 				if cerr := f.Close(); cerr != nil {
-					addIssue("close-report-machine", cerr)
+					addIssue("close-report-json", cerr)
 					if fatalErr == nil {
 						fatalErr = fmt.Errorf("close JSON report: %w", cerr)
 					}
 				}
-				addIssue("write-report-machine", werr)
+				addIssue("write-report-json", werr)
 				if fatalErr == nil {
 					fatalErr = fmt.Errorf("write JSON report: %w", werr)
 				}
 			} else if cerr := f.Close(); cerr != nil {
-				addIssue("close-report-machine", cerr)
+				addIssue("close-report-json", cerr)
 				if fatalErr == nil {
 					fatalErr = fmt.Errorf("close JSON report: %w", cerr)
 				}
@@ -349,27 +375,101 @@ func Run(ctx context.Context, cfg config.Config) Result {
 		}
 	}
 
-	if humanIssueCount >= 0 && len(issues) > humanIssueCount {
-		f, rewriteErr := os.Create(humanPath)
+	switch cfg.ReportSelection {
+	case config.ReportHTML, config.ReportAll:
+		htmlPath := filepath.Join(cfg.OutputDir, inputBase+".report.html")
+		f, ferr := os.Create(htmlPath)
+		if ferr != nil {
+			addIssue("create-report-html", ferr)
+			if fatalErr == nil {
+				fatalErr = fmt.Errorf("create HTML report: %w", ferr)
+			}
+		} else {
+			if werr := report.GenerateHTML(buildReportData(), cfg.Language, f); werr != nil {
+				if cerr := f.Close(); cerr != nil {
+					addIssue("close-report-html", cerr)
+					if fatalErr == nil {
+						fatalErr = fmt.Errorf("close HTML report: %w", cerr)
+					}
+				}
+				addIssue("write-report-html", werr)
+				if fatalErr == nil {
+					fatalErr = fmt.Errorf("write HTML report: %w", werr)
+				}
+			} else if cerr := f.Close(); cerr != nil {
+				addIssue("close-report-html", cerr)
+				if fatalErr == nil {
+					fatalErr = fmt.Errorf("close HTML report: %w", cerr)
+				}
+			} else if reportPath == "" {
+				reportPath = htmlPath
+			}
+		}
+	}
+
+	if cfg.ReportSelection == config.ReportSARIF {
+		sarifPath := filepath.Join(cfg.OutputDir, inputBase+".sarif.json")
+		f, ferr := os.Create(sarifPath)
+		if ferr != nil {
+			addIssue("create-report-sarif", ferr)
+			if fatalErr == nil {
+				fatalErr = fmt.Errorf("create SARIF report: %w", ferr)
+			}
+		} else {
+			if werr := report.GenerateSARIF(buildReportData(), f); werr != nil {
+				if cerr := f.Close(); cerr != nil {
+					addIssue("close-report-sarif", cerr)
+					if fatalErr == nil {
+						fatalErr = fmt.Errorf("close SARIF report: %w", cerr)
+					}
+				}
+				addIssue("write-report-sarif", werr)
+				if fatalErr == nil {
+					fatalErr = fmt.Errorf("write SARIF report: %w", werr)
+				}
+			} else if cerr := f.Close(); cerr != nil {
+				addIssue("close-report-sarif", cerr)
+				if fatalErr == nil {
+					fatalErr = fmt.Errorf("close SARIF report: %w", cerr)
+				}
+			} else if reportPath == "" {
+				reportPath = sarifPath
+			}
+		}
+	}
+
+	if markdownIssueCount >= 0 && len(issues) > markdownIssueCount {
+		f, rewriteErr := os.Create(markdownPath)
 		if rewriteErr != nil {
-			addIssue("rewrite-report-human", rewriteErr)
+			addIssue("rewrite-report-markdown", rewriteErr)
 			if fatalErr == nil {
 				fatalErr = fmt.Errorf("rewrite report: %w", rewriteErr)
 			}
 		} else {
-			if writeErr := report.GenerateHuman(buildReportData(), cfg.Language, f); writeErr != nil {
+			if markdownOptionsErr != nil {
 				if closeErr := f.Close(); closeErr != nil {
-					addIssue("rewrite-report-human", closeErr)
+					addIssue("rewrite-report-markdown", closeErr)
 					if fatalErr == nil {
 						fatalErr = fmt.Errorf("rewrite report: %w", closeErr)
 					}
 				}
-				addIssue("rewrite-report-human", writeErr)
+				addIssue("rewrite-report-markdown", markdownOptionsErr)
+				if fatalErr == nil {
+					fatalErr = fmt.Errorf("rewrite report: %w", markdownOptionsErr)
+				}
+			} else if writeErr := report.GenerateMarkdownWithEngine(buildReportData(), cfg.Language, f, markdownRenderConfig.Engine, markdownRenderConfig.Template); writeErr != nil {
+				if closeErr := f.Close(); closeErr != nil {
+					addIssue("rewrite-report-markdown", closeErr)
+					if fatalErr == nil {
+						fatalErr = fmt.Errorf("rewrite report: %w", closeErr)
+					}
+				}
+				addIssue("rewrite-report-markdown", writeErr)
 				if fatalErr == nil {
 					fatalErr = fmt.Errorf("rewrite report: %w", writeErr)
 				}
 			} else if closeErr := f.Close(); closeErr != nil {
-				addIssue("rewrite-report-human", closeErr)
+				addIssue("rewrite-report-markdown", closeErr)
 				if fatalErr == nil {
 					fatalErr = fmt.Errorf("rewrite report: %w", closeErr)
 				}
@@ -403,6 +503,56 @@ func Run(ctx context.Context, cfg config.Config) Result {
 	}
 }
 
+// sbomExtension returns the file extension for the given SBOM format string.
+func sbomExtension(format string) string {
+	switch format {
+	case "cyclonedx-xml":
+		return ".cdx.xml"
+	case "spdx-json":
+		return ".spdx.json"
+	default:
+		return ".cdx.json"
+	}
+}
+
+// markdownRenderOptionsFromConfig resolves Markdown report renderer options from
+// runtime configuration, including optional template file loading.
+type markdownRenderConfig struct {
+	Engine   string
+	Template string
+}
+
+func markdownRenderOptionsFromConfig(cfg config.Config) (markdownRenderConfig, error) {
+	engine := strings.TrimSpace(cfg.MarkdownRenderEngine)
+	if engine == "" || engine == "writer" {
+		return markdownRenderConfig{}, nil
+	}
+
+	opts := markdownRenderConfig{}
+	switch engine {
+	case "template-wrapper":
+		opts.Engine = "template-wrapper"
+	case "template-document":
+		opts.Engine = "template-document"
+	default:
+		return markdownRenderConfig{}, fmt.Errorf("unsupported markdown render engine: %q", engine)
+	}
+
+	templateFile := strings.TrimSpace(cfg.MarkdownTemplateFile)
+	if templateFile == "" {
+		return opts, nil
+	}
+
+	raw, err := os.ReadFile(templateFile)
+	if err != nil {
+		return markdownRenderConfig{}, fmt.Errorf("read markdown template file %q: %w", templateFile, err)
+	}
+	opts.Template = string(raw)
+	return opts, nil
+}
+
+// treeHasHardSecurity reports whether any node in the extraction tree ended in
+// a hard security block state.
 func treeHasHardSecurity(node *extract.ExtractionNode) bool {
 	if node == nil {
 		return false
@@ -418,6 +568,8 @@ func treeHasHardSecurity(node *extract.ExtractionNode) bool {
 	return false
 }
 
+// treeHasIncomplete reports whether extraction contains failed, skipped, or
+// tool-missing nodes that indicate incomplete analysis.
 func treeHasIncomplete(node *extract.ExtractionNode) bool {
 	if node == nil {
 		return false
@@ -434,6 +586,7 @@ func treeHasIncomplete(node *extract.ExtractionNode) bool {
 	return false
 }
 
+// hasScanFailures reports whether any scan task returned an execution error.
 func hasScanFailures(scans []scan.ScanResult) bool {
 	for _, scanResult := range scans {
 		if scanResult.Error != nil {

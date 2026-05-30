@@ -96,7 +96,7 @@ func findRepoRoot(t *testing.T) string {
 }
 
 // TestReleaseGrypeRoundtrip runs extract-sbom --grype against the vendor-suite
-// zip and validates that the machine report reports a completed vulnerability
+// zip and validates that the JSON report reports a completed vulnerability
 // enrichment with a non-empty grypeVersion.  The test is skipped when Grype or
 // any other required external tool is absent so it degrades gracefully in
 // environments without the full toolchain.
@@ -157,15 +157,15 @@ func TestReleaseGrypeRoundtrip(t *testing.T) {
 	humanReportPath := filepath.Join(outDir, "vendor-suite-3.2.report.md")
 
 	if _, err := os.Stat(machineReportPath); err != nil {
-		t.Fatalf("machine report not written: %v", err)
+		t.Fatalf("JSON report not written: %v", err)
 	}
 	if _, err := os.Stat(humanReportPath); err != nil {
-		t.Fatalf("human report not written: %v", err)
+		t.Fatalf("markdown report not written: %v", err)
 	}
 
 	raw, err := os.ReadFile(machineReportPath)
 	if err != nil {
-		t.Fatalf("reading machine report: %v", err)
+		t.Fatalf("reading JSON report: %v", err)
 	}
 
 	var report struct {
@@ -176,7 +176,7 @@ func TestReleaseGrypeRoundtrip(t *testing.T) {
 		} `json:"vulnerabilities"`
 	}
 	if unmarshalErr := json.Unmarshal(raw, &report); unmarshalErr != nil {
-		t.Fatalf("parsing machine report JSON: %v", unmarshalErr)
+		t.Fatalf("parsing JSON report JSON: %v", unmarshalErr)
 	}
 
 	if report.Vulnerabilities.State != "completed" {
@@ -191,10 +191,10 @@ func TestReleaseGrypeRoundtrip(t *testing.T) {
 
 	humanRaw, err := os.ReadFile(humanReportPath)
 	if err != nil {
-		t.Fatalf("reading human report: %v", err)
+		t.Fatalf("reading markdown report: %v", err)
 	}
 	if !bytes.Contains(humanRaw, []byte("Vulnerability")) {
-		t.Error("human report does not contain 'Vulnerability' section")
+		t.Error("markdown report does not contain 'Vulnerability' section")
 	}
 
 	t.Logf("grype roundtrip passed (grypeVersion=%s)", report.Vulnerabilities.GrypeVersion)

@@ -7,7 +7,7 @@ matter, and which outputs to expect.
 
 This quickstart runs the complete incoming-inspection flow in one command:
 SBOM generation plus optional Grype-based vulnerability enrichment for the
-human/machine report.
+markdown/json report.
 
 ```bash
 # 1) Create output directory and run extract-sbom with enrichment
@@ -21,7 +21,7 @@ ls -1 out/
 Expected outputs:
 
 - `out/vendor-delivery.cdx.json`
-- `out/vendor-delivery.report.md` (or `.report.json` with `--report machine`)
+- `out/vendor-delivery.report.md` (or `.report.json` with `--report json`, `.report.html` with `--report html`, `.sarif.json` with `--report sarif`)
 
 The report now includes a vulnerability summary table and package-grouped details.
 
@@ -109,16 +109,26 @@ Expected behavior:
 
 For input `delivery.zip` and output directory `out/`:
 
-- SBOM: `out/delivery.cdx.json`
-- Human report: `out/delivery.report.md` (`--report human`)
-- Machine report: `out/delivery.report.json` (`--report machine`)
-- Both: both report files (`--report both`)
+| `--format` | SBOM file |
+|---|---|
+| `cyclonedx-json` (default) | `out/delivery.cdx.json` |
+| `cyclonedx-xml` | `out/delivery.cdx.xml` |
+| `spdx-json` | `out/delivery.spdx.json` |
+
+| `--report` | Report file(s) |
+|---|---|
+| `markdown` (default) | `out/delivery.report.md` |
+| `json` | `out/delivery.report.json` |
+| `html` | `out/delivery.report.html` |
+| `sarif` | `out/delivery.sarif.json` |
+| `both` | `.report.md` + `.report.json` |
+| `all` | `.report.md` + `.report.json` + `.report.html` |
 
 ## Scenario 1: Standard Incoming Check (Trusted CI Worker)
 
 Goal:
 
-- process one delivery file and get SBOM + human report quickly
+- process one delivery file and get SBOM + markdown report quickly
 
 Command:
 
@@ -222,7 +232,60 @@ Output effect:
 - SBOM metadata component contains these values/properties
 - report root metadata section documents them
 
-## Scenario 5: Machine-Readable Report for Automation
+## Scenario 5: SPDX Output for Supply-Chain Compliance
+
+Goal:
+
+- produce an SPDX 2.3 JSON SBOM alongside the audit report for standards-mandated workflows (ISO/IEC 5962, Executive Order 14028, etc.)
+
+Command:
+
+```bash
+mkdir -p out
+./extract-sbom \
+  --unsafe \
+  --format spdx-json \
+  --output-dir out \
+  vendor-delivery.zip
+```
+
+Expected outputs:
+
+- `out/vendor-delivery.spdx.json` — SPDX 2.3 document with components as SPDX packages, PURLs as download locations, and DEPENDS_ON relationships
+- `out/vendor-delivery.report.md` — audit report (Markdown, default)
+
+## Scenario 6: SARIF Output for GitHub/GitLab Security Scanning
+
+Goal:
+
+- feed vulnerability findings directly into GitHub Advanced Security or GitLab SAST dashboards
+
+Command:
+
+```bash
+mkdir -p out
+./extract-sbom \
+  --unsafe \
+  --grype \
+  --report sarif \
+  --output-dir out \
+  vendor-delivery.zip
+```
+
+Expected outputs:
+
+- `out/vendor-delivery.cdx.json` — CycloneDX SBOM
+- `out/vendor-delivery.sarif.json` — SARIF 2.1.0 with one result per vulnerability match
+
+In GitHub Actions, upload the SARIF file with:
+
+```yaml
+- uses: github/codeql-action/upload-sarif@v3
+  with:
+    sarif_file: out/vendor-delivery.sarif.json
+```
+
+## Scenario 7: Machine-Readable Report for Automation
 
 Goal:
 
@@ -234,7 +297,7 @@ Command:
 mkdir -p out
 ./extract-sbom \
   --unsafe \
-  --report machine \
+  --report json \
   --output-dir out \
   vendor-delivery.zip
 ```
@@ -243,14 +306,32 @@ Result:
 
 - `out/vendor-delivery.report.json` contains structured extraction/scanning/decision data
 
+Use `--report all` to produce Markdown + JSON + HTML in a single run.
+
 ## Parameters by Concern
 
 ### Input/Output
 
 **positional `<input-file>`**
 
-The delivery file to analyze. Can be archive (ZIP, TAR, CAB, MSI, 7z, RAR,
-InstallShield CAB) or container (OCI image, Docker archive).
+The delivery file to analyze. Supported formats:
+
+| Format | Detection | Extraction tool |
+|---|---|---|
+| ZIP | Magic `PK\x03\x04` | 7zz |
+| TAR / GzipTAR / Bzip2TAR / XzTAR / ZstdTAR | Magic bytes / extension | 7zz |
+| CAB (Microsoft) | Magic `MSCF` | 7zz |
+| MSI / OLE compound doc | Magic `D0 CF 11 E0` | 7zz (metadata read directly) |
+| 7z | Magic `7z\xBC\xAF` | 7zz |
+| RAR | Magic `Rar!` | 7zz |
+| InstallShield CAB | Magic `ISc(` / naming `data*.cab` | unshield |
+| ISO 9660 | `.iso` extension | 7zz |
+| CPIO | Magic `070701`/`070702`/binary | 7zz |
+| Squashfs / Snap (`.snap`, `.squashfs`) | Magic `hsqs`/`sqsh` | unsquashfs (7zz fallback) |
+| AppImage | ELF + `AI` marker at offset 8 | not yet supported |
+
+Syft-native formats (JAR, WAR, EAR, RPM, DEB, APK, wheel, gem, crate, nupkg)
+are passed directly to Syft without extraction by extract-sbom.
 
 For encrypted ZIP archives, extract-sbom detects encryption and automatically
 re-routes extraction to 7-Zip.
@@ -292,7 +373,11 @@ the user's home directory; an explicit `--config` overrides auto-discovery.
 
 **`--format`**
 
-SBOM output format. Currently the tool only supports `cyclonedx-json`.
+SBOM output format. Valid values:
+
+- `cyclonedx-json` (default): CycloneDX 1.6 JSON (`*.cdx.json`)
+- `cyclonedx-xml`: CycloneDX 1.6 XML (`*.cdx.xml`)
+- `spdx-json`: SPDX 2.3 JSON (`*.spdx.json`) — components mapped to SPDX packages with PURL download locations and DEPENDS_ON relationships
 
 **`--parallel`**
 
@@ -380,14 +465,16 @@ Determines how installer packages (MSI, CAB) are interpreted.
 Override to `physical` only for raw archive analysis where installer metadata
 is not relevant.
 
-**`--report human|machine|both` (default: human)**
+**`--report markdown|json|both|html|sarif|all` (default: markdown)**
 
 Output format for the audit report.
 
-- `human`: Markdown file (`*.report.md`), readable for manual review.
-- `machine`: JSON file (`*.report.json`), structured for tooling/CI
-  integration.
-- `both`: both formats written.
+- `markdown`: Markdown file (`*.report.md`), readable for manual review.
+- `json`: JSON file (`*.report.json`), structured for tooling/CI integration.
+- `both`: both `human` + `machine` formats written.
+- `html`: standalone HTML file (`*.report.html`) with embedded CSS, severity-colored vulnerability table, and collapsible extraction log — no external dependencies, suitable for sharing with auditors.
+- `sarif`: SARIF 2.1.0 JSON file (`*.sarif.json`) — one result per vulnerability match, severity mapped to SARIF levels (`error` for critical/high, `warning` for medium, `note` for low/negligible). Use with `--grype` to populate results. Designed for GitHub/GitLab security scanning integration.
+- `all`: all three of `human`, `machine`, and `html` written simultaneously.
 
 **`--grype`**
 
@@ -427,8 +514,27 @@ For the end-to-end processing model behind these progress messages, see
 
 **`--language en|de` (default: en)**
 
-Language for human-readable report. German (`de`) translates all narrative
-text; SBOM and machine report remain English.
+Language for markdown-readable report. German (`de`) translates all narrative
+text; SBOM and json report remain English.
+
+**`--markdown-render-engine writer|template-wrapper|template-document` (default: writer)**
+
+Selects the backend for Markdown markdown-report rendering.
+
+- `writer`: canonical deterministic writer backend (default).
+- `template-wrapper`: wraps canonical Markdown body (`{{.Body}}`) via `text/template`.
+- `template-document`: renders from a caller-provided document template using
+  pre-rendered section blocks.
+
+This option only affects Markdown reports (`--report markdown|both|all`).
+
+**`--markdown-template-file <path>`**
+
+Path to a UTF-8 text/template file used by template renderers.
+
+- Required for `--markdown-render-engine template-document`.
+- Optional for `template-wrapper` (empty wrapper defaults to `{{.Body}}`).
+- Rejected for `writer` to avoid silently ignored configuration.
 
 ### Root Metadata
 
@@ -514,7 +620,7 @@ malicious or accidentally complex archives in CI.
 
 **`--unsafe`**
 
-Disable external extractor sandboxing. External tools (`7zz`, `unshield`) run
+Disable external extractor sandboxing. External tools (`7zz`, `unshield`, `unsquashfs`) run
 without isolation constraints.
 
 In this mode, containment relies on extractor behavior (for example 7-Zip path
@@ -543,15 +649,28 @@ the secure default on Linux.
 
 ## Reading the Outputs
 
-SBOM (`*.cdx.json`):
+**SBOM files:**
 
-- CycloneDX format (`bomFormat`, `specVersion`)
-- delivery traceability in component properties:
-  - `extract-sbom:delivery-path`
-  - `extract-sbom:extraction-status`
+| File | Format | Notes |
+|---|---|---|
+| `*.cdx.json` | CycloneDX 1.6 JSON | Default. `bomFormat`, `specVersion` fields present. |
+| `*.cdx.xml` | CycloneDX 1.6 XML | Same content as JSON, different serialization. |
+| `*.spdx.json` | SPDX 2.3 JSON | Components as packages, dependencies as DEPENDS_ON relationships. PURL used as download location where available. |
 
-Report (`*.report.md` / `*.report.json`):
+All SBOM files include delivery traceability via component properties:
+- `extract-sbom:delivery-path` — path inside the original delivery archive
+- `extract-sbom:extraction-status` — extraction outcome for this artifact
 
+**Report files:**
+
+| File | Format | Primary use |
+|---|---|---|
+| `*.report.md` | Markdown | Manual review, PDF pipelines |
+| `*.report.html` | Standalone HTML | Sharing with auditors, browser viewing |
+| `*.report.json` | JSON | Downstream automation, pipeline integration |
+| `*.sarif.json` | SARIF 2.1.0 | GitHub/GitLab security scanning |
+
+All report formats contain:
 - input hashes (SHA-256, SHA-512)
 - effective configuration and limits
 - sandbox mode used
@@ -559,3 +678,4 @@ Report (`*.report.md` / `*.report.json`):
 - scan outcomes and policy decisions
 - processing issues (if any)
 - residual risk/limitations section
+- vulnerability findings (when `--grype` is enabled)

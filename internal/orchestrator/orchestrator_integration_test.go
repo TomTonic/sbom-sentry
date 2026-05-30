@@ -26,36 +26,36 @@ func TestRunSurvivingHumanReportIncludesLaterMachineFailure(t *testing.T) {
 	cfg.InputPath = inputPath
 	cfg.OutputDir = dir
 	cfg.Unsafe = true
-	cfg.ReportMode = config.ReportBoth
+	cfg.ReportSelection = config.ReportBoth
 
 	result := Run(context.Background(), cfg)
 
 	foundMachineIssue := false
 	for _, issue := range result.Issues {
-		if issue.Stage == "create-report-machine" {
+		if issue.Stage == "create-report-json" {
 			foundMachineIssue = true
 			break
 		}
 	}
 	if !foundMachineIssue {
-		t.Fatal("result issues missing create-report-machine")
+		t.Fatal("result issues missing create-report-json")
 	}
 
 	if result.ReportPath == "" {
-		t.Fatal("ReportPath is empty; expected surviving human report")
+		t.Fatal("ReportPath is empty; expected surviving markdown report")
 	}
 	humanReport, err := os.ReadFile(result.ReportPath)
 	if err != nil {
-		t.Fatalf("cannot read human report: %v", err)
+		t.Fatalf("cannot read markdown report: %v", err)
 	}
 	humanStr := string(humanReport)
 
 	for _, fragment := range []string{
 		"## Processing Errors",
-		"create-report-machine",
+		"create-report-json",
 	} {
 		if !strings.Contains(humanStr, fragment) {
-			t.Fatalf("human report missing %q", fragment)
+			t.Fatalf("markdown report missing %q", fragment)
 		}
 	}
 }
@@ -100,7 +100,7 @@ func TestRunWithPathTraversalZIPStillWritesSBOMAndReport(t *testing.T) {
 	cfg.OutputDir = dir
 	cfg.Unsafe = true
 	cfg.PolicyMode = config.PolicyPartial
-	cfg.ReportMode = config.ReportBoth
+	cfg.ReportSelection = config.ReportBoth
 
 	result := Run(context.Background(), cfg)
 
@@ -132,7 +132,7 @@ func TestRunWithDeniedSandboxReportsToolMissing(t *testing.T) {
 	cfg.InputPath = inputPath
 	cfg.OutputDir = dir
 	cfg.Unsafe = false
-	cfg.ReportMode = config.ReportHuman
+	cfg.ReportSelection = config.ReportMarkdown
 
 	result := Run(context.Background(), cfg)
 
@@ -158,7 +158,7 @@ func TestRunWithMissingExternalToolExitsPartial(t *testing.T) {
 	cfg.InputPath = inputPath
 	cfg.OutputDir = dir
 	cfg.Unsafe = true
-	cfg.ReportMode = config.ReportHuman
+	cfg.ReportSelection = config.ReportMarkdown
 
 	result := Run(context.Background(), cfg)
 
@@ -197,7 +197,7 @@ func TestRunWithExternalToolFailureExitsPartial(t *testing.T) {
 	cfg.InputPath = inputPath
 	cfg.OutputDir = dir
 	cfg.Unsafe = true
-	cfg.ReportMode = config.ReportHuman
+	cfg.ReportSelection = config.ReportMarkdown
 
 	result := Run(context.Background(), cfg)
 
@@ -258,7 +258,7 @@ func TestRunNestedZIPEndToEndProducesOutputFiles(t *testing.T) {
 	cfg.InputPath = inputPath
 	cfg.OutputDir = dir
 	cfg.Unsafe = true
-	cfg.ReportMode = config.ReportBoth
+	cfg.ReportSelection = config.ReportBoth
 	cfg.ParallelScanners = 1
 
 	result := Run(context.Background(), cfg)
@@ -369,7 +369,7 @@ func TestRunNestedZIPReportContainsExtractionLogAndScans(t *testing.T) {
 	cfg.InputPath = inputPath
 	cfg.OutputDir = dir
 	cfg.Unsafe = true
-	cfg.ReportMode = config.ReportBoth
+	cfg.ReportSelection = config.ReportBoth
 	cfg.ParallelScanners = 1
 
 	result := Run(context.Background(), cfg)
@@ -383,7 +383,7 @@ func TestRunNestedZIPReportContainsExtractionLogAndScans(t *testing.T) {
 
 	human, err := os.ReadFile(result.ReportPath)
 	if err != nil {
-		t.Fatalf("cannot read human report: %v", err)
+		t.Fatalf("cannot read markdown report: %v", err)
 	}
 	humanStr := string(human)
 
@@ -399,14 +399,14 @@ func TestRunNestedZIPReportContainsExtractionLogAndScans(t *testing.T) {
 		"nested-with-jar.zip/inner.zip/lib/app.jar",
 	} {
 		if !strings.Contains(humanStr, fragment) {
-			t.Fatalf("human report missing %q", fragment)
+			t.Fatalf("markdown report missing %q", fragment)
 		}
 	}
 
 	jsonPath := strings.TrimSuffix(result.ReportPath, ".report.md") + ".report.json"
 	machine, err := os.ReadFile(jsonPath)
 	if err != nil {
-		t.Fatalf("cannot read machine report: %v", err)
+		t.Fatalf("cannot read JSON report: %v", err)
 	}
 
 	var parsed struct {
@@ -418,7 +418,7 @@ func TestRunNestedZIPReportContainsExtractionLogAndScans(t *testing.T) {
 		} `json:"scans"`
 	}
 	if err := json.Unmarshal(machine, &parsed); err != nil {
-		t.Fatalf("invalid machine report JSON: %v", err)
+		t.Fatalf("invalid JSON report JSON: %v", err)
 	}
 	if parsed.Extraction.Path != "nested-with-jar.zip" {
 		t.Fatalf("machine extraction root path = %q, want %q", parsed.Extraction.Path, "nested-with-jar.zip")
@@ -434,7 +434,7 @@ func TestRunNestedZIPReportContainsExtractionLogAndScans(t *testing.T) {
 		"nested-with-jar.zip/inner.zip/lib/app.jar",
 	} {
 		if !nodePaths[want] {
-			t.Fatalf("machine report scans missing nodePath %q", want)
+			t.Fatalf("JSON report scans missing nodePath %q", want)
 		}
 	}
 }
@@ -469,7 +469,7 @@ func TestRunPartialPolicyReportExplainsDecision(t *testing.T) {
 	cfg.OutputDir = dir
 	cfg.Unsafe = true
 	cfg.PolicyMode = config.PolicyPartial
-	cfg.ReportMode = config.ReportHuman
+	cfg.ReportSelection = config.ReportMarkdown
 	cfg.Limits.MaxFiles = 1
 
 	result := Run(context.Background(), cfg)
@@ -479,7 +479,7 @@ func TestRunPartialPolicyReportExplainsDecision(t *testing.T) {
 
 	human, err := os.ReadFile(result.ReportPath)
 	if err != nil {
-		t.Fatalf("cannot read human report: %v", err)
+		t.Fatalf("cannot read markdown report: %v", err)
 	}
 	humanStr := string(human)
 

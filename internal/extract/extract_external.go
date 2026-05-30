@@ -1,13 +1,11 @@
 package extract
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 
@@ -23,10 +21,12 @@ var sevenZipCandidates = []string{"7zz", "7za", "7z"}
 
 // lazily captured tool versions — populated on first successful use.
 var (
-	sevenZipVersionOnce  sync.Once
-	sevenZipVersionValue string
-	unshieldVersionOnce  sync.Once
-	unshieldVersionValue string
+	sevenZipVersionOnce    sync.Once
+	sevenZipVersionValue   string
+	unshieldVersionOnce    sync.Once
+	unshieldVersionValue   string
+	unsquashfsVersionOnce  sync.Once
+	unsquashfsVersionValue string
 )
 
 // captureSevenZipVersion runs "binary i" once and stores the first non-empty
@@ -71,6 +71,28 @@ func captureUnshieldVersion() {
 	})
 }
 
+// captureUnsquashfsVersion runs "unsquashfs -version" once and stores the first
+// reported line (for example "unsquashfs version 4.5.1 (2022/03/13)") as the
+// version identifier. The squashfs-tools banner is emitted on stdout by recent
+// releases and on stderr by older ones, so both streams are inspected and the
+// command exit status is ignored.
+func captureUnsquashfsVersion() {
+	unsquashfsVersionOnce.Do(func() {
+		out, err := exec.Command("unsquashfs", "-version").CombinedOutput() //nolint:gosec // fixed binary name
+		if err != nil && len(out) == 0 {
+			return
+		}
+		for _, line := range strings.Split(string(out), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			unsquashfsVersionValue = line
+			return
+		}
+	})
+}
+
 // GetUsedSevenZipVersion returns the 7-Zip version string captured on first
 // use, or an empty string if 7-Zip was never invoked during this run.
 func GetUsedSevenZipVersion() string { return sevenZipVersionValue }
@@ -78,6 +100,10 @@ func GetUsedSevenZipVersion() string { return sevenZipVersionValue }
 // GetUsedUnshieldVersion returns the unshield version string captured on first
 // use, or an empty string if unshield was never invoked during this run.
 func GetUsedUnshieldVersion() string { return unshieldVersionValue }
+
+// GetUsedUnsquashfsVersion returns the unsquashfs version string captured on
+// first use, or an empty string if unsquashfs was never invoked during this run.
+func GetUsedUnsquashfsVersion() string { return unsquashfsVersionValue }
 
 // resolve7zBinary returns the first available 7-Zip binary name and true,
 // or ("7zz", false) if none is found (7zz is used as the canonical name in
@@ -292,6 +318,32 @@ func extractUnshield(ctx context.Context, node *ExtractionNode, filePath string,
 	return nil
 }
 
+// extractSquashfs extracts a SquashFS image using unsquashfs when available,
+// falling back to 7-Zip if unsquashfs is not installed.
+func extractSquashfs(ctx context.Context, node *ExtractionNode, filePath string, sb sandbox.Sandbox, workDir string, limits config.Limits) error {
+	if !isToolAvailable("unsquashfs") {
+		// Fall back to 7z extraction.
+		return extract7zWithPasswords(ctx, node, filePath, sb, workDir, limits, nil)
+	}
+	captureUnsquashfsVersion()
+
+	outDir, err := os.MkdirTemp(workDir, "extract-sbom-squashfs-*")
+	if err != nil {
+		return fmt.Errorf("extract: create temp dir: %w", err)
+	}
+
+	node.Tool = "unsquashfs"
+	node.SandboxUsed = sb.Name()
+	args := []string{"-d", outDir, "-f", filePath}
+	if err := sb.Run(ctx, "unsquashfs", args, filePath, outDir); err != nil {
+		os.RemoveAll(outDir)
+		node.Status = StatusFailed
+		node.StatusDetail = fmt.Sprintf("unsquashfs extraction failed: %v", err)
+		return nil
+	}
+	return finalizeExternalExtraction(node, outDir, limits)
+}
+
 // finalizeExternalExtraction validates and summarizes an output directory created
 // by an external extractor before attaching it to the extraction tree.
 func finalizeExternalExtraction(node *ExtractionNode, outDir string, limits config.Limits) error {
@@ -313,264 +365,6 @@ func finalizeExternalExtraction(node *ExtractionNode, outDir string, limits conf
 	node.StatusDetail = fmt.Sprintf("extracted %d entries", entriesCount)
 
 	return nil
-}
-
-func formatExtractionFailureDetail(binary string, node *ExtractionNode, filePath string, err error) string {
-	base := summarizeToolError(err)
-	detail := ""
-	if base != "" {
-		detail = fmt.Sprintf("%s extraction failed: %s", binary, base)
-	}
-
-	lower := strings.ToLower(base)
-	switch {
-	case strings.Contains(lower, "invalid tar header"):
-		detail += "; hint: file appears truncated/corrupt, or it is not a real TAR stream"
-	case strings.Contains(lower, "can not open the file as archive"):
-		detail += "; hint: file content does not match the detected archive format, or archive is damaged"
-	case strings.Contains(lower, "wrong password") || strings.Contains(lower, "data error in encrypted file"):
-		detail += "; hint: archive is encrypted; configure a matching password via --password"
-	case strings.Contains(lower, "headers error") || strings.Contains(lower, "unconfirmed start of archive"):
-		detail += "; hint: central directory/header structure is inconsistent (often truncated file or appended payload)"
-	}
-
-	if detail == "" {
-		detail = fmt.Sprintf("%s extraction failed (%s)", binary, filepath.Base(filePath))
-		if node.Format.Format != 0 {
-			detail += ": detected=" + node.Format.Format.String()
-		}
-	}
-
-	return detail
-}
-
-func summarizeToolError(err error) string {
-	type parseSection int
-	const (
-		sectionGeneric parseSection = iota
-		sectionErrors
-		sectionWarnings
-	)
-
-	lines := strings.Split(err.Error(), "\n")
-	errors := make([]string, 0, 3)
-	warnings := make([]string, 0, 2)
-	generic := make([]string, 0, 2)
-	section := sectionGeneric
-
-	for _, raw := range lines {
-		line := strings.TrimSpace(raw)
-		if line == "" {
-			continue
-		}
-		// Strip the sandbox stderr-prefix FIRST so that section headers
-		// that appear on the first stderr line (e.g. "stderr: ERRORS:") are
-		// still recognised by the switch below.
-		if strings.HasPrefix(line, "stderr:") {
-			line = strings.TrimSpace(strings.TrimPrefix(line, "stderr:"))
-			if line == "" {
-				continue
-			}
-		}
-		switch line {
-		case "ERRORS:":
-			section = sectionErrors
-			continue
-		case "WARNINGS:":
-			section = sectionWarnings
-			continue
-		case "--":
-			continue
-		}
-		if isToolNoiseLine(line) {
-			continue
-		}
-
-		switch section {
-		case sectionErrors:
-			errors = append(errors, line)
-		case sectionWarnings:
-			warnings = append(warnings, line)
-		default:
-			generic = append(generic, line)
-		}
-	}
-
-	if len(errors) > 0 {
-		parts := limitStrings(errors, 3)
-		extra := len(errors) - len(parts)
-		if len(warnings) > 0 {
-			parts = append(parts, "warning: "+warnings[0])
-		}
-		result := strings.Join(parts, "; ")
-		if extra > 0 {
-			result += fmt.Sprintf("; [%d more error(s)]", extra)
-		}
-		return result
-	}
-	if len(generic) > 0 {
-		// Return all captured non-noise lines so that unrecognised or
-		// localised output variants never silently lose information.
-		parts := limitStrings(generic, 3)
-		extra := len(generic) - len(parts)
-		if len(warnings) > 0 {
-			parts = append(parts, "warning: "+warnings[0])
-		}
-		result := strings.Join(parts, "; ")
-		if extra > 0 {
-			result += fmt.Sprintf("; [%d more line(s)]", extra)
-		}
-		return result
-	}
-	if len(warnings) > 0 {
-		parts := make([]string, 0, min(len(warnings), 2))
-		for _, w := range limitStrings(warnings, 2) {
-			parts = append(parts, "warning: "+w)
-		}
-		return strings.Join(parts, "; ")
-	}
-	return strings.TrimSpace(err.Error())
-}
-
-func isToolNoiseLine(line string) bool {
-	l := strings.ToLower(strings.TrimSpace(line))
-	if l == "" {
-		return true
-	}
-	// The sandbox wrapper always prefixes its own error with "sandbox:"; that
-	// line is noise.  The former "execution failed" substring check was
-	// redundant (covered by the prefix) and too broad — it would also
-	// accidentally filter real 7-Zip error messages containing those words.
-	if strings.HasPrefix(l, "sandbox:") {
-		return true
-	}
-	if strings.HasPrefix(l, "7-zip") || strings.HasPrefix(l, "scanning the drive") ||
-		strings.HasPrefix(l, "extracting archive:") || strings.HasPrefix(l, "path =") ||
-		strings.HasPrefix(l, "type =") || strings.HasPrefix(l, "physical size =") ||
-		strings.HasPrefix(l, "headers size =") || strings.HasPrefix(l, "tail size =") ||
-		strings.HasPrefix(l, "characteristics =") {
-		return true
-	}
-	return false
-}
-
-func limitStrings(values []string, maxItems int) []string {
-	if len(values) <= maxItems {
-		return values
-	}
-	return values[:maxItems]
-}
-
-// collect7zListMetadata performs a best-effort `7zz l -slt` and extracts
-// compact archive metadata for report rendering.
-func collect7zListMetadata(ctx context.Context, binary string, filePath string) *ArchiveMetadata {
-	cmd := exec.CommandContext(ctx, binary, "l", "-slt", filePath) //nolint:gosec // G204: binary is resolved from fixed 7-Zip candidate names.
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil
-	}
-	if err := cmd.Start(); err != nil {
-		return nil
-	}
-
-	meta := &ArchiveMetadata{}
-	methods := map[string]struct{}{}
-	inHeader := true
-
-	scanner := bufio.NewScanner(stdout)
-	buf := make([]byte, 0, 64*1024)
-	scanner.Buffer(buf, 1024*1024)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		if strings.HasPrefix(line, "----------") {
-			inHeader = false
-			continue
-		}
-
-		key, val, ok := strings.Cut(line, "=")
-		if !ok {
-			continue
-		}
-		key = strings.TrimSpace(key)
-		val = strings.TrimSpace(val)
-
-		if inHeader {
-			switch key {
-			case "Type":
-				meta.Type = val
-			case "Physical Size":
-				meta.PhysicalSize = val
-			case "Headers Size":
-				meta.HeadersSize = val
-			case "Solid":
-				meta.Solid = val
-			case "Blocks":
-				meta.Blocks = val
-			}
-		}
-
-		switch key {
-		case "Method":
-			if val != "" {
-				methods[val] = struct{}{}
-			}
-		case "Encrypted":
-			if val == "+" || strings.EqualFold(val, "true") {
-				meta.HasEncryptedItem = true
-			}
-		}
-	}
-
-	_ = cmd.Wait()
-	if scanErr := scanner.Err(); scanErr != nil {
-		return nil
-	}
-
-	if len(methods) > 0 {
-		meta.Methods = make([]string, 0, len(methods))
-		for m := range methods {
-			meta.Methods = append(meta.Methods, m)
-		}
-		sort.Strings(meta.Methods)
-	}
-
-	if meta.Type == "" && len(meta.Methods) == 0 && meta.PhysicalSize == "" && meta.HeadersSize == "" &&
-		meta.Solid == "" && meta.Blocks == "" && !meta.HasEncryptedItem {
-		return nil
-	}
-	return meta
-}
-
-// summarizeExtractedDir walks an extracted directory and returns the count and
-// total size of regular files so external-tool extraction metrics match the
-// in-process ZIP and TAR extractors.
-func summarizeExtractedDir(outDir string) (int, int64, error) {
-	entriesCount := 0
-	totalSize := int64(0)
-
-	err := filepath.Walk(outDir, func(_ string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if info.IsDir() {
-			return nil
-		}
-		if !info.Mode().IsRegular() {
-			return nil
-		}
-
-		entriesCount++
-		totalSize += info.Size()
-		return nil
-	})
-	if err != nil {
-		return 0, 0, err
-	}
-
-	return entriesCount, totalSize, nil
 }
 
 // isToolAvailable checks whether an external tool can be resolved from PATH.

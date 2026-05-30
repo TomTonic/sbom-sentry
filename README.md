@@ -8,8 +8,8 @@
 extract-sbom performs standardized incoming inspection for software deliveries.
 Given one input file, it produces:
 
-- one consolidated CycloneDX SBOM
-- one audit report (human-readable Markdown, machine-readable JSON, or both)
+- one consolidated SBOM (CycloneDX JSON, CycloneDX XML, or SPDX JSON)
+- one audit report (Markdown, HTML, JSON, SARIF, or any combination)
 
 It recursively processes nested containers and archive formats, applies safety
 limits, records extraction/scanning decisions, and keeps traceability via
@@ -64,15 +64,17 @@ inspection: one file in, one consolidated CycloneDX SBOM and one auditable repor
 |---|:---:|:---:|:---:|:---:|:---:|
 | Designed for incoming delivery inspection | ✓ | ✗ | ✗ | ✗ | ✗ |
 | Recursive nested archive extraction | ✓ | ✗ | ✗ | ✗ | ✗ |
-| MSI / CAB / InstallShield support | ✓ | ✗ | ✗ | ✗ | ✗ |
+| MSI / CAB / InstallShield / ISO / CPIO / Squashfs support | ✓ | ✗ | ✗ | ✗ | ✗ |
 | Single delivery file in → consolidated SBOM out | ✓ | ✗ | ✗ | ✗ | ✗ |
-| Auditable extraction report (Markdown / JSON) | ✓ | ✗ | ✗ | ✗ | ✗ |
+| Auditable extraction report (Markdown / HTML / JSON / SARIF) | ✓ | ✗ | ✗ | ✗ | ✗ |
 | Delivery-path traceability in SBOM metadata | ✓ | ✗ | ✗ | ✗ | ✗ |
 | Sandboxed execution for untrusted vendor input | ✓ | ✗ | ✗ | ✗ | ✗ |
 | Policy-controlled extraction (depth / size limits) | ✓ | ✗ | ✗ | ✗ | ✗ |
 | Deterministic / reproducible output | ✓ | ✗ | ✗ | ✗ | ✗ |
 | Component cataloging across packaging ecosystems | ✓ (via Syft) | ✓ | ✗ | ✓ | ✗ |
-| CycloneDX output | ✓ | ✓ | ✓ | ✗ | ~ |
+| CycloneDX output (JSON + XML) | ✓ | ✓ | ✓ | ✗ | ~ |
+| SPDX 2.3 JSON output | ✓ | ✓ | ✓ | ✓ | ✗ |
+| SARIF output for CI security gates | ✓ | ✗ | ✗ | ✗ | ✗ |
 | Independent of container registry / OCI | ✓ | ✓ | ✓ | ✓ | ✗ |
 | SBOM manipulation (merge, diff, validate, sign) | ✗ | ✗ | ✓ | ✗ | ✗ |
 
@@ -86,13 +88,13 @@ inspection: one file in, one consolidated CycloneDX SBOM and one auditable repor
 
 ## What It Does
 
-- Identifies archive/container formats (ZIP, TAR variants, CAB, MSI, 7z, RAR, InstallShield CAB)
+- Identifies archive/container formats (ZIP, TAR variants, CAB, MSI, 7z, RAR, InstallShield CAB, ISO, CPIO, Squashfs/Snap, AppImage)
 - Extracts recursively with policy and resource limits
 - Detects encrypted ZIP entries and automatically re-routes those archives to 7-Zip
 - Tries configured passwords in order for password-protected formats handled by external extractors
 - Uses Syft in library mode for component cataloging
-- Assembles one deterministic CycloneDX 1.6 SBOM
-- Generates an auditable report in English or German
+- Assembles one deterministic SBOM in CycloneDX 1.6 JSON (`--format cyclonedx-json`), CycloneDX XML (`--format cyclonedx-xml`), or SPDX 2.3 JSON (`--format spdx-json`)
+- Generates an auditable report in Markdown (`--report markdown`), standalone HTML (`--report html`), structured JSON (`--report json`), SARIF 2.1.0 (`--report sarif`), or all formats at once (`--report all`) — in English or German
 
 ## Encrypted Archives and Password Sources
 
@@ -152,8 +154,8 @@ extract-sbom \
 
 Typical outputs in `out/` (base name derived from input file):
 
-- `sample-delivery.cdx.json`
-- `sample-delivery.report.md` (or `.report.json`, depending on `--report`)
+- `sample-delivery.cdx.json` (default; use `--format cyclonedx-xml` for `.cdx.xml`, `--format spdx-json` for `.spdx.json`)
+- `sample-delivery.report.md` (default; use `--report json` for `.report.json`, `--report html` for `.report.html`, `--report sarif` for `.sarif.json`, `--report all` for all formats)
 
 ## Documentation
 

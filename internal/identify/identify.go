@@ -41,6 +41,14 @@ const (
 	RAR
 	// InstallShieldCAB represents a proprietary InstallShield cabinet file.
 	InstallShieldCAB
+	// ISO represents an ISO 9660 disc image.
+	ISO
+	// CPIO represents a CPIO archive.
+	CPIO
+	// Squashfs represents a SquashFS filesystem image (includes Snap packages).
+	Squashfs
+	// AppImage represents an AppImage (ELF + embedded SquashFS).
+	AppImage
 )
 
 // String returns the human-readable name of the format.
@@ -68,6 +76,14 @@ func (f Format) String() string {
 		return "RAR"
 	case InstallShieldCAB:
 		return "InstallShieldCAB"
+	case ISO:
+		return "ISO"
+	case CPIO:
+		return "CPIO"
+	case Squashfs:
+		return "Squashfs"
+	case AppImage:
+		return "AppImage"
 	default:
 		return "Unknown"
 	}
@@ -292,10 +308,73 @@ func identifyFromHeader(header []byte, ext string, baseName string) FormatInfo {
 		return info
 	}
 
+	// AppImage: ELF magic (7F 45 4C 46) at offset 0, with 'A','I' at offset 8-9
+	// and type byte (0x01 or 0x02) at offset 10.
+	if len(header) >= 11 &&
+		header[0] == 0x7F && header[1] == 0x45 && header[2] == 0x4C && header[3] == 0x46 &&
+		header[8] == 0x41 && header[9] == 0x49 &&
+		(header[10] == 0x01 || header[10] == 0x02) {
+		info.Format = AppImage
+		info.MIMEType = "application/x-appimage"
+		info.Extractable = false // tool-missing at extraction time
+		return info
+	}
+
+	// SquashFS: magic at offset 0.
+	// Little-endian: "hsqs" (68 73 71 73)
+	// Big-endian:    "sqsh" (73 71 73 68)
+	if len(header) >= 4 &&
+		((header[0] == 0x68 && header[1] == 0x73 && header[2] == 0x71 && header[3] == 0x73) ||
+			(header[0] == 0x73 && header[1] == 0x71 && header[2] == 0x73 && header[3] == 0x68)) {
+		info.Format = Squashfs
+		info.MIMEType = "application/x-squashfs"
+		info.Extractable = true
+		return info
+	}
+
+	// CPIO: various magic patterns at offset 0.
+	// newc format: "070701" (ASCII)
+	// newcrc format: "070702" (ASCII)
+	// old binary BE: 0xc7 0x71
+	// old binary LE: 0x71 0xc7
+	if len(header) >= 6 &&
+		header[0] == '0' && header[1] == '7' && header[2] == '0' &&
+		header[3] == '7' && (header[4] == '0' || header[4] == '1') &&
+		(header[5] == '1' || header[5] == '2') {
+		info.Format = CPIO
+		info.MIMEType = "application/x-cpio"
+		info.Extractable = true
+		return info
+	}
+	if len(header) >= 2 &&
+		((header[0] == 0xC7 && header[1] == 0x71) || (header[0] == 0x71 && header[1] == 0xC7)) {
+		info.Format = CPIO
+		info.MIMEType = "application/x-cpio"
+		info.Extractable = true
+		return info
+	}
+
 	// Extension-based fallback for compressed tars with gzip magic but no tar extension.
 	if len(header) >= 2 && header[0] == 0x1F && header[1] == 0x8B && (ext == ".gz" || ext == ".tgz") {
 		info.Format = GzipTAR
 		info.MIMEType = "application/gzip"
+		info.Extractable = true
+		return info
+	}
+
+	// ISO 9660: extension-based heuristic (.iso files are virtually always ISO 9660).
+	// The actual magic is at offset 32769 which is beyond our 262-byte header window.
+	if ext == ".iso" {
+		info.Format = ISO
+		info.MIMEType = "application/x-iso9660-image"
+		info.Extractable = true
+		return info
+	}
+
+	// Squashfs by extension (.snap, .squashfs) when magic was not detected.
+	if ext == ".snap" || ext == ".squashfs" {
+		info.Format = Squashfs
+		info.MIMEType = "application/x-squashfs"
 		info.Extractable = true
 		return info
 	}

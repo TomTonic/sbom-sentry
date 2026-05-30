@@ -33,42 +33,51 @@ import (
 	"github.com/TomTonic/extract-sbom/internal/orchestrator"
 )
 
+// main executes the CLI command and maps setup/validation failures to exit 2.
 func main() {
 	if err := rootCmd().Execute(); err != nil {
 		os.Exit(2)
 	}
 }
 
+// rootCmd builds the top-level Cobra command and wires all runtime flags.
+//
+// The command delegates configuration resolution to loadConfig and then invokes
+// the orchestrator pipeline with progress/report output suitable for CLI use.
 func rootCmd() *cobra.Command {
 	bi := buildinfo.Read()
 
 	var (
-		configPath   string
-		outputDir    string
-		workDir      string
-		sbomFormat   string
-		policyStr    string
-		modeStr      string
-		reportStr    string
-		progress     string
-		language     string
-		mfg          string
-		name         string
-		version      string
-		delivDate    string
-		rootProps    []string
-		skipExts     []string
-		passwords    []string
-		passwordFile string
-		grype        bool
-		unsafe       bool
-		maxDepth     int
-		maxFiles     int
-		maxSize      int64
-		maxEntry     int64
-		maxRatio     int
-		timeout      string
-		parallel     int
+		configPath              string
+		outputDir               string
+		workDir                 string
+		sbomFormat              string
+		policyStr               string
+		modeStr                 string
+		reportStr               string
+		progress                string
+		language                string
+		markdownEngine          string
+		templateFile            string
+		legacyHumanEngine       string
+		legacyHumanTemplateFile string
+		mfg                     string
+		name                    string
+		version                 string
+		delivDate               string
+		rootProps               []string
+		skipExts                []string
+		passwords               []string
+		passwordFile            string
+		grype                   bool
+		unsafe                  bool
+		maxDepth                int
+		maxFiles                int
+		maxSize                 int64
+		maxEntry                int64
+		maxRatio                int
+		timeout                 string
+		parallel                int
 	)
 
 	cmd := &cobra.Command{
@@ -145,12 +154,18 @@ Configuration can be set via:
 	// CLI flags (also bound to viper for env var / config file support).
 	cmd.Flags().StringVarP(&outputDir, "output-dir", "o", ".", "Target directory for SBOM and report output")
 	cmd.Flags().StringVar(&workDir, "work-dir", defaults.WorkDir, "Base directory for temporary extraction work")
-	cmd.Flags().StringVar(&sbomFormat, "format", "cyclonedx-json", "SBOM output format")
+	cmd.Flags().StringVar(&sbomFormat, "format", "cyclonedx-json", "SBOM output format: cyclonedx-json, cyclonedx-xml, or spdx-json")
 	cmd.Flags().StringVar(&policyStr, "policy", "partial", "Policy mode: partial (skip issue and continue) or strict (abort)")
 	cmd.Flags().StringVar(&modeStr, "mode", "installer-semantic", "Interpretation mode: physical or installer-semantic")
-	cmd.Flags().StringVar(&reportStr, "report", "human", "Report output mode: human, machine, or both")
+	cmd.Flags().StringVar(&reportStr, "report", "markdown", "Report output mode: markdown, json, both, html, sarif, or all")
 	cmd.Flags().StringVar(&progress, "progress", "normal", "Progress output verbosity: quiet, normal, or verbose")
 	cmd.Flags().StringVar(&language, "language", "en", "Report language: en or de")
+	cmd.Flags().StringVar(&markdownEngine, "markdown-render-engine", defaults.MarkdownRenderEngine, "Markdown report renderer: writer, template-wrapper, or template-document")
+	cmd.Flags().StringVar(&templateFile, "markdown-template-file", "", "Path to text/template file for markdown template renderers")
+	cmd.Flags().StringVar(&legacyHumanEngine, "human-render-engine", "", "DEPRECATED: use --markdown-render-engine")
+	cmd.Flags().StringVar(&legacyHumanTemplateFile, "human-template-file", "", "DEPRECATED: use --markdown-template-file")
+	_ = cmd.Flags().MarkDeprecated("human-render-engine", "use --markdown-render-engine")
+	_ = cmd.Flags().MarkDeprecated("human-template-file", "use --markdown-template-file")
 	cmd.Flags().StringVar(&mfg, "root-manufacturer", "", "Manufacturer/supplier for the SBOM root component")
 	cmd.Flags().StringVar(&name, "root-name", "", "Software/product name for the SBOM root component")
 	cmd.Flags().StringVar(&version, "root-version", "", "Version for the SBOM root component")
@@ -172,6 +187,10 @@ Configuration can be set via:
 	return cmd
 }
 
+// loadConfig resolves the effective runtime configuration from flags,
+// environment variables, optional YAML config, and built-in defaults.
+//
+// Precedence is: CLI flags > environment > config file > defaults.
 func loadConfig(cmd *cobra.Command, args []string) (config.Config, error) {
 	v := viper.New()
 	v.SetConfigName(".extract-sbom")
@@ -191,6 +210,8 @@ func loadConfig(cmd *cobra.Command, args []string) (config.Config, error) {
 	v.SetEnvPrefix("EXTRACT_SBOM")
 	v.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
 	v.AutomaticEnv()
+	_ = v.BindEnv("markdown-render-engine", "EXTRACT_SBOM_MARKDOWN_RENDER_ENGINE", "EXTRACT_SBOM_HUMAN_RENDER_ENGINE")
+	_ = v.BindEnv("markdown-template-file", "EXTRACT_SBOM_MARKDOWN_TEMPLATE_FILE", "EXTRACT_SBOM_HUMAN_TEMPLATE_FILE")
 
 	var bindErr error
 	cmd.Flags().VisitAll(func(f *pflag.Flag) {
@@ -218,6 +239,18 @@ func loadConfig(cmd *cobra.Command, args []string) (config.Config, error) {
 	cfg.WorkDir = v.GetString("work-dir")
 	cfg.SBOMFormat = v.GetString("format")
 	cfg.Language = v.GetString("language")
+	cfg.MarkdownRenderEngine = v.GetString("markdown-render-engine")
+	cfg.MarkdownTemplateFile = v.GetString("markdown-template-file")
+	if !cmd.Flags().Changed("markdown-render-engine") {
+		if legacyEngine := strings.TrimSpace(v.GetString("human-render-engine")); legacyEngine != "" {
+			cfg.MarkdownRenderEngine = legacyEngine
+		}
+	}
+	if !cmd.Flags().Changed("markdown-template-file") {
+		if legacyTemplate := strings.TrimSpace(v.GetString("human-template-file")); legacyTemplate != "" {
+			cfg.MarkdownTemplateFile = legacyTemplate
+		}
+	}
 	cfg.GrypeEnabled = v.GetBool("grype")
 	cfg.RootMetadata.Manufacturer = v.GetString("root-manufacturer")
 	cfg.RootMetadata.Name = v.GetString("root-name")
@@ -243,11 +276,11 @@ func loadConfig(cmd *cobra.Command, args []string) (config.Config, error) {
 	}
 	cfg.InterpretMode = interpretMode
 
-	reportMode, err := config.ParseReportMode(v.GetString("report"))
+	reportMode, err := config.ParseReportSelection(v.GetString("report"))
 	if err != nil {
 		return config.Config{}, err
 	}
-	cfg.ReportMode = reportMode
+	cfg.ReportSelection = reportMode
 
 	progressLevel, err := config.ParseProgressLevel(v.GetString("progress"))
 	if err != nil {
@@ -329,6 +362,10 @@ const (
 	maxPasswordCount     = 10_000
 )
 
+// loadPasswordFile returns all usable passwords from path in file order.
+//
+// Empty lines and comment lines ('#') are skipped. Size and line-count limits
+// are enforced to prevent unbounded extraction retry amplification.
 func loadPasswordFile(path string) ([]string, error) {
 	info, err := os.Stat(path)
 	if err != nil {
